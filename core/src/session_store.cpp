@@ -102,8 +102,9 @@ fs::path SessionStore::SessionPath(const std::string& id) const {
     return directory_ / (id + ".json");
 }
 
-Session SessionStore::Create(const fs::path& project, const std::string& model) const {
-    return {1, NewId(), fs::canonical(project).string(), model, {}};
+Session SessionStore::Create(const fs::path& project, const std::string& model,
+                             const std::string& provider) const {
+    return {1, NewId(), fs::canonical(project).string(), provider, model, {}};
 }
 
 void SessionStore::Save(const Session& session) const {
@@ -113,6 +114,7 @@ void SessionStore::Save(const Session& session) const {
         {"version", json::Value::Number(session.version)},
         {"id", json::Value::String(session.id)},
         {"project", json::Value::String(session.project)},
+        {"provider", json::Value::String(session.provider)},
         {"model", json::Value::String(session.model)},
         {"messages", json::Value::Array(std::move(messages))},
     });
@@ -138,6 +140,7 @@ Session SessionStore::Load(const std::string& id) const {
     session.id = root.GetString("id");
     if (session.id != id) throw std::runtime_error("session id does not match its filename");
     session.project = root.GetString("project");
+    session.provider = root.GetString("provider");
     session.model = root.GetString("model");
     const auto& messages = root.At("messages");
     if (messages.type != json::Value::Type::Array)

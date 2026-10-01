@@ -28,6 +28,7 @@ CORE_SOURCES := \
 	core/src/json.cpp \
 	core/src/model.cpp \
 	core/src/openai_provider.cpp \
+	core/src/provider_profile.cpp \
 	core/src/session_store.cpp \
 	core/src/sse_decoder.cpp \
 	core/src/workspace.cpp
@@ -58,6 +59,7 @@ build/kairo-tests: build/tests/test_main.o build/libkairo.a
 
 build/kairo-gui: build/apps/gui/main.o build/libkairo.a $(BUNDLED_CURL_OUTPUTS)
 	$(CXX) $(LDFLAGS) $(GUI_RPATH) -o $@ build/apps/gui/main.o build/libkairo.a $(GUI_PROVIDER_LIBS) -lbe -ltracker
+	./scripts/embed-haiku-resources.sh $@
 
 build/libcurl.so.4.8.0: vendor/haiku-x86_64/lib/libcurl.so.4.8.0
 	@mkdir -p $(@D)

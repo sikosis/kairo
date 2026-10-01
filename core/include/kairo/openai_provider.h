@@ -11,6 +11,7 @@ struct OpenAIConfig {
     std::string api_key_environment = "KAIRO_API_KEY";
     long timeout_seconds = 120;
     std::string api_key;
+    bool anthropic_compatibility = false;
 };
 
 class OpenAIProvider : public Provider {

@@ -1,5 +1,6 @@
 #include "kairo/agent_engine.h"
 #include "kairo/openai_provider.h"
+#include "kairo/provider_profile.h"
 #include "kairo/sse_decoder.h"
 #include "json.h"
 
@@ -105,6 +106,19 @@ void TestProviderUrlPolicy() {
     Check(rejected, "provider URL credentials rejected");
 }
 
+void TestProviderProfiles() {
+    const auto profiles = kairo::DefaultProviderProfiles();
+    Check(profiles.size() >= 3, "default provider profiles");
+    Check(profiles[0].kind == kairo::ProviderKind::OpenAI && !profiles[0].models.empty(),
+          "OpenAI profile defaults");
+    Check(profiles[1].kind == kairo::ProviderKind::AnthropicCompatibility &&
+          profiles[1].base_url == "https://api.anthropic.com/v1",
+          "Anthropic profile defaults");
+    Check(kairo::ParseProviderKind(kairo::ProviderKindId(profiles[2].kind)) == profiles[2].kind,
+          "provider kind round trip");
+    Check(kairo::CreateProvider(profiles[1]) != nullptr, "provider factory");
+}
+
 void TestJsonUnicode() {
     auto value = kairo::json::Parse(R"("\ud83d\ude00")");
     Check(value.string == "\xf0\x9f\x98\x80", "JSON surrogate pair decoding");
@@ -176,7 +190,7 @@ void TestAgentApprovalAndResume() {
     fs::path sessions = temporary.path() / "sessions";
     fs::create_directories(project);
     kairo::SessionStore store(sessions);
-    kairo::Session session = store.Create(project, "fake-model");
+    kairo::Session session = store.Create(project, "fake-model", "test-provider");
     auto provider = std::make_shared<ToolThenAnswerProvider>();
     kairo::AgentEngine engine(provider, kairo::Workspace(project, 4096), store);
     std::vector<kairo::EventType> event_types;
@@ -193,6 +207,7 @@ void TestAgentApprovalAndResume() {
     kairo::Session resumed = store.Load(session.id);
     Check(resumed.messages.size() == 4, "session resume message count");
     Check(resumed.project == fs::canonical(project).string(), "session project persisted");
+    Check(resumed.provider == "test-provider", "session provider profile persisted");
     struct stat metadata{};
     Check(::stat((sessions / (session.id + ".json")).c_str(), &metadata) == 0, "session file exists");
     Check((metadata.st_mode & 077) == 0, "session file permissions are restrictive");
@@ -227,6 +242,7 @@ int main() {
         TestSseFragmentation();
         TestInputSafetyLimits();
         TestProviderUrlPolicy();
+        TestProviderProfiles();
         TestJsonUnicode();
         TestWorkspacePolicy();
         TestAgentApprovalAndResume();

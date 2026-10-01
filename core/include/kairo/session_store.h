@@ -12,6 +12,7 @@ struct Session {
     int version = 1;
     std::string id;
     std::string project;
+    std::string provider;
     std::string model;
     std::vector<Message> messages;
 };
@@ -19,7 +20,8 @@ struct Session {
 class SessionStore {
 public:
     explicit SessionStore(std::filesystem::path directory);
-    Session Create(const std::filesystem::path& project, const std::string& model) const;
+    Session Create(const std::filesystem::path& project, const std::string& model,
+                   const std::string& provider = {}) const;
     void Save(const Session& session) const;
     Session Load(const std::string& id) const;
     std::vector<std::string> List() const;

@@ -4,6 +4,7 @@
 
 #include "kairo/agent_engine.h"
 #include "kairo/openai_provider.h"
+#include "kairo/provider_profile.h"
 
 #include <Alert.h>
 #include <Application.h>
@@ -35,6 +36,7 @@
 #include <algorithm>
 #include <condition_variable>
 #include <chrono>
+#include <cstddef>
 #include <ctime>
 #include <cstring>
 #include <cstdlib>
@@ -69,22 +71,24 @@ constexpr uint32 kApprovalModeChanged = 'apmd';
 constexpr uint32 kEngineEvent = 'kevt';
 constexpr uint32 kApprovalRequest = 'kapr';
 constexpr uint32 kApprovalDecision = 'kapd';
+constexpr uint32 kProviderChanged = 'pvch';
+constexpr uint32 kModelChanged = 'mdch';
+constexpr uint32 kSettingsProviderChanged = 'spch';
+constexpr uint32 kSettingsKindChanged = 'skch';
+constexpr uint32 kSettingsAddProvider = 'sadd';
+constexpr uint32 kSettingsDeleteProvider = 'sdel';
 
-constexpr const char* kModels[] = {
-    "qwen/qwen3.8-27b",
-    "openai/gpt-oss-120b",
-    "openai/gpt-oss-20b",
-    "gpt-4.1-mini",
-    "gpt-4.1",
-    "gpt-4.1-nano",
-    "o4-mini",
-    "o3",
-};
+bool ProfileHasKey(const kairo::ProviderProfile& profile) {
+    if (!profile.api_key.empty()) return true;
+    const char* key = profile.api_key_environment.empty()
+        ? nullptr : std::getenv(profile.api_key_environment.c_str());
+    return key && *key;
+}
 
-const char* ReadyStatus(const char* configured_key = nullptr) {
-    const char* key = configured_key && *configured_key
-        ? configured_key : std::getenv("KAIRO_API_KEY");
-    return key && *key ? "Ready - API key configured" : "Ready - API key missing";
+std::string ReadyStatus(const kairo::ProviderProfile& profile) {
+    return ProfileHasKey(profile)
+        ? "Ready - " + profile.name + " key configured"
+        : "Ready - " + profile.name + " key missing";
 }
 
 struct PendingApproval {
@@ -157,8 +161,8 @@ void WriteLog(const char* level, const std::string& message) noexcept {
 }
 
 struct ProviderSettings {
-    std::string endpoint = "https://api.openai.com/v1";
-    std::string api_key;
+    std::vector<kairo::ProviderProfile> profiles;
+    std::string selected_provider_id;
 };
 
 enum class TranscriptStyle {
@@ -175,20 +179,113 @@ fs::path ProviderSettingsPath() {
 }
 
 ProviderSettings LoadProviderSettings() {
-    ProviderSettings settings;
-    if (const char* endpoint = std::getenv("KAIRO_BASE_URL"); endpoint && *endpoint)
-        settings.endpoint = endpoint;
-    if (const char* key = std::getenv("KAIRO_API_KEY"); key && *key)
-        settings.api_key = key;
+    ProviderSettings settings{kairo::DefaultProviderProfiles(), "openai"};
+
+    // Preserve the original environment-only configuration as the custom profile.
+    auto environment_custom = std::find_if(settings.profiles.begin(), settings.profiles.end(),
+        [](const kairo::ProviderProfile& profile) { return profile.id == "custom"; });
+    const char* legacy_endpoint = std::getenv("KAIRO_BASE_URL");
+    const char* legacy_key = std::getenv("KAIRO_API_KEY");
+    if (environment_custom != settings.profiles.end()
+        && ((legacy_endpoint && *legacy_endpoint) || (legacy_key && *legacy_key))) {
+        if (legacy_endpoint && *legacy_endpoint) environment_custom->base_url = legacy_endpoint;
+        settings.selected_provider_id = environment_custom->id;
+    }
 
     BFile file(ProviderSettingsPath().c_str(), B_READ_ONLY);
     BMessage archive;
     if (file.InitCheck() != B_OK || archive.Unflatten(&file) != B_OK) return settings;
+    int32 version = 1;
+    archive.FindInt32("version", &version);
     const char* value = nullptr;
-    if (archive.FindString("endpoint", &value) == B_OK && value && *value)
-        settings.endpoint = value;
-    if (archive.FindString("api_key", &value) == B_OK && value)
-        settings.api_key = value;
+    if (version >= 2) {
+        ProviderSettings loaded;
+        if (archive.FindString("selected_provider", &value) == B_OK && value)
+            loaded.selected_provider_id = value;
+        for (int32 index = 0;; ++index) {
+            BMessage item;
+            if (archive.FindMessage("profile", index, &item) != B_OK) break;
+            kairo::ProviderProfile profile;
+            if (item.FindString("id", &value) == B_OK && value) profile.id = value;
+            if (item.FindString("name", &value) == B_OK && value) profile.name = value;
+            if (item.FindString("kind", &value) == B_OK && value) {
+                try { profile.kind = kairo::ParseProviderKind(value); }
+                catch (...) { continue; }
+            }
+            if (item.FindString("endpoint", &value) == B_OK && value) profile.base_url = value;
+            if (item.FindString("key_environment", &value) == B_OK && value)
+                profile.api_key_environment = value;
+            if (item.FindString("api_key", &value) == B_OK && value) profile.api_key = value;
+            if (item.FindString("selected_model", &value) == B_OK && value)
+                profile.selected_model = value;
+            for (int32 model_index = 0;
+                 item.FindString("model", model_index, &value) == B_OK; ++model_index)
+                if (value && *value) profile.models.emplace_back(value);
+            if (!profile.id.empty() && !profile.name.empty() && !profile.base_url.empty()
+                && !profile.models.empty())
+                loaded.profiles.push_back(std::move(profile));
+        }
+        if (!loaded.profiles.empty()) {
+            if (loaded.selected_provider_id.empty())
+                loaded.selected_provider_id = loaded.profiles.front().id;
+            return loaded;
+        }
+    }
+
+    // Migrate the original single-provider settings into the custom profile.
+    auto custom = std::find_if(settings.profiles.begin(), settings.profiles.end(),
+        [](const kairo::ProviderProfile& profile) { return profile.id == "custom"; });
+    if (custom != settings.profiles.end()) {
+        if (archive.FindString("endpoint", &value) == B_OK && value && *value)
+            custom->base_url = value;
+        if (archive.FindString("api_key", &value) == B_OK && value)
+            custom->api_key = value;
+        settings.selected_provider_id = custom->id;
+    }
+    return settings;
+}
+
+void AddSettingsToMessage(BMessage& archive, const ProviderSettings& settings) {
+    archive.AddInt32("version", 2);
+    archive.AddString("selected_provider", settings.selected_provider_id.c_str());
+    for (const auto& profile : settings.profiles) {
+        BMessage item('kprf');
+        item.AddString("id", profile.id.c_str());
+        item.AddString("name", profile.name.c_str());
+        item.AddString("kind", kairo::ProviderKindId(profile.kind).c_str());
+        item.AddString("endpoint", profile.base_url.c_str());
+        item.AddString("key_environment", profile.api_key_environment.c_str());
+        item.AddString("api_key", profile.api_key.c_str());
+        item.AddString("selected_model", profile.selected_model.c_str());
+        for (const auto& model : profile.models) item.AddString("model", model.c_str());
+        archive.AddMessage("profile", &item);
+    }
+}
+
+ProviderSettings SettingsFromMessage(const BMessage& archive) {
+    ProviderSettings settings;
+    const char* value = nullptr;
+    if (archive.FindString("selected_provider", &value) == B_OK && value)
+        settings.selected_provider_id = value;
+    for (int32 index = 0;; ++index) {
+        BMessage item;
+        if (archive.FindMessage("profile", index, &item) != B_OK) break;
+        kairo::ProviderProfile profile;
+        if (item.FindString("id", &value) == B_OK && value) profile.id = value;
+        if (item.FindString("name", &value) == B_OK && value) profile.name = value;
+        if (item.FindString("kind", &value) == B_OK && value)
+            profile.kind = kairo::ParseProviderKind(value);
+        if (item.FindString("endpoint", &value) == B_OK && value) profile.base_url = value;
+        if (item.FindString("key_environment", &value) == B_OK && value)
+            profile.api_key_environment = value;
+        if (item.FindString("api_key", &value) == B_OK && value) profile.api_key = value;
+        if (item.FindString("selected_model", &value) == B_OK && value)
+            profile.selected_model = value;
+        for (int32 model_index = 0;
+             item.FindString("model", model_index, &value) == B_OK; ++model_index)
+            if (value && *value) profile.models.emplace_back(value);
+        settings.profiles.push_back(std::move(profile));
+    }
     return settings;
 }
 
@@ -212,8 +309,7 @@ status_t SaveProviderSettings(const ProviderSettings& settings) {
     }
 
     BMessage archive('kpst');
-    archive.AddString("endpoint", settings.endpoint.c_str());
-    archive.AddString("api_key", settings.api_key.c_str());
+    AddSettingsToMessage(archive, settings);
     status_t result;
     {
         BFile file(temporary.c_str(), B_WRITE_ONLY | B_ERASE_FILE);
@@ -235,35 +331,71 @@ status_t SaveProviderSettings(const ProviderSettings& settings) {
 class ProviderSettingsWindow : public BWindow {
 public:
     ProviderSettingsWindow(BMessenger target, const ProviderSettings& settings)
-        : BWindow(BRect(180, 180, 800, 370), "Kairo Provider Settings",
-                  B_TITLED_WINDOW, B_NOT_ZOOMABLE | B_NOT_RESIZABLE
-                      | B_AUTO_UPDATE_SIZE_LIMITS),
-          target_(target) {
-        endpoint_ = new BTextControl("settings-endpoint", "API URL",
-                                     settings.endpoint.c_str(), nullptr);
-        api_key_ = new BTextControl("settings-api-key", "API key",
-                                    settings.api_key.c_str(), nullptr);
+        : BWindow(BRect(180, 180, 870, 650), "Kairo Provider Settings",
+                  B_TITLED_WINDOW, B_NOT_ZOOMABLE | B_AUTO_UPDATE_SIZE_LIMITS),
+          target_(target), profiles_(settings.profiles),
+          selected_provider_id_(settings.selected_provider_id) {
+        if (profiles_.empty()) profiles_ = kairo::DefaultProviderProfiles();
+        provider_menu_ = new BPopUpMenu("settings-provider-options", true, true);
+        provider_ = new BMenuField("settings-provider", "Provider", provider_menu_);
+        kind_menu_ = new BPopUpMenu("settings-kind-options", true, true);
+        for (int32 index = 0; index < 3; ++index) {
+            auto kind = static_cast<kairo::ProviderKind>(index);
+            BMessage* selected = new BMessage(kSettingsKindChanged);
+            selected->AddInt32("index", index);
+            kind_menu_->AddItem(new BMenuItem(kairo::ProviderKindName(kind), selected));
+        }
+        kind_ = new BMenuField("settings-kind", "Type", kind_menu_);
+        name_ = new BTextControl("settings-name", "Name", "", nullptr);
+        endpoint_ = new BTextControl("settings-endpoint", "API URL", "", nullptr);
+        key_environment_ = new BTextControl("settings-key-environment", "Key variable", "", nullptr);
+        api_key_ = new BTextControl("settings-api-key", "API key", "", nullptr);
         api_key_->TextView()->HideTyping(true);
-        endpoint_->SetExplicitMinSize(BSize(520, B_SIZE_UNSET));
-        api_key_->SetExplicitMinSize(BSize(520, B_SIZE_UNSET));
+        models_ = new BTextView("settings-models");
+        auto* models_scroll = new BScrollView("settings-models-scroll", models_, 0, false, true);
+        provider_->SetExplicitMinSize(BSize(560, B_SIZE_UNSET));
+        name_->SetExplicitMinSize(BSize(560, B_SIZE_UNSET));
+        endpoint_->SetExplicitMinSize(BSize(560, B_SIZE_UNSET));
+        key_environment_->SetExplicitMinSize(BSize(560, B_SIZE_UNSET));
+        api_key_->SetExplicitMinSize(BSize(560, B_SIZE_UNSET));
+        models_scroll->SetExplicitMinSize(BSize(560, 130));
+        auto* add = new BButton("settings-add", "Add Provider",
+                                new BMessage(kSettingsAddProvider));
+        auto* remove = new BButton("settings-delete", "Delete Provider",
+                                   new BMessage(kSettingsDeleteProvider));
         auto* cancel = new BButton("settings-cancel", "Cancel",
                                    new BMessage(B_QUIT_REQUESTED));
-        auto* save = new BButton("settings-save", "Save",
+        auto* save = new BButton("settings-save", "Save All",
                                  new BMessage(kSaveSettings));
         SetDefaultButton(save);
 
         BLayoutBuilder::Group<>(this, B_VERTICAL, B_USE_DEFAULT_SPACING)
             .SetInsets(B_USE_WINDOW_INSETS)
-            .Add(new BStringView("provider-name", "Provider: OpenAI-compatible"))
+            .AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
+                .Add(provider_, 1.0f)
+                .Add(add)
+                .Add(remove)
+            .End()
+            .Add(name_)
+            .Add(kind_)
             .Add(endpoint_)
+            .Add(key_environment_)
             .Add(api_key_)
+            .Add(new BStringView("models-label", "Models (one API model ID per line)"))
+            .Add(models_scroll, 1.0f)
             .Add(new BStringView("credential-note",
-                "The API key is stored locally with owner-only permissions."))
+                "Keys are API credentials, stored locally with owner-only permissions. "
+                "Chat subscriptions are not API credentials."))
             .AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
                 .AddGlue()
                 .Add(cancel)
                 .Add(save)
             .End();
+        RebuildProviderMenu();
+        current_ = 0;
+        for (std::size_t index = 0; index < profiles_.size(); ++index)
+            if (profiles_[index].id == selected_provider_id_) current_ = index;
+        LoadCurrent();
     }
 
     void MessageReceived(BMessage* message) override {
@@ -271,25 +403,154 @@ public:
             Activate(true);
             return;
         }
-        if (message->what != kSaveSettings) {
-            BWindow::MessageReceived(message);
+        if (message->what == kSettingsProviderChanged) {
+            int32 index = 0;
+            if (message->FindInt32("index", &index) == B_OK && index >= 0
+                && static_cast<std::size_t>(index) < profiles_.size()) {
+                StoreCurrent();
+                current_ = static_cast<std::size_t>(index);
+                LoadCurrent();
+            }
             return;
         }
-        if (std::strlen(endpoint_->Text()) == 0) {
-            endpoint_->MakeFocus(true);
+        if (message->what == kSettingsKindChanged) {
+            int32 index = 0;
+            if (message->FindInt32("index", &index) == B_OK && index >= 0 && index < 3)
+                profiles_[current_].kind = static_cast<kairo::ProviderKind>(index);
             return;
         }
+        if (message->what == kSettingsAddProvider) { AddProvider(); return; }
+        if (message->what == kSettingsDeleteProvider) { DeleteProvider(); return; }
+        if (message->what == kSaveSettings) { SaveAll(); return; }
+        BWindow::MessageReceived(message);
+    }
+
+private:
+    static void ClearMenu(BMenu* menu) {
+        while (BMenuItem* item = menu->RemoveItem(static_cast<int32>(0))) delete item;
+    }
+
+    static std::vector<std::string> ParseModels(const char* text) {
+        std::vector<std::string> models;
+        std::string input = text ? text : "";
+        std::size_t start = 0;
+        while (start <= input.size()) {
+            std::size_t end = input.find('\n', start);
+            std::string model = input.substr(start, end == std::string::npos
+                ? std::string::npos : end - start);
+            while (!model.empty() && (model.back() == '\r' || model.back() == ' '
+                   || model.back() == '\t')) model.pop_back();
+            std::size_t first = model.find_first_not_of(" \t");
+            if (first != std::string::npos) models.push_back(model.substr(first));
+            if (end == std::string::npos) break;
+            start = end + 1;
+        }
+        return models;
+    }
+
+    bool StoreCurrent() {
+        if (current_ >= profiles_.size()) return false;
+        auto& profile = profiles_[current_];
+        profile.name = name_->Text();
+        profile.base_url = endpoint_->Text();
+        profile.api_key_environment = key_environment_->Text();
+        profile.api_key = api_key_->Text();
+        profile.models = ParseModels(models_->Text());
+        BMenuItem* marked_kind = kind_menu_->FindMarked();
+        if (marked_kind) profile.kind = static_cast<kairo::ProviderKind>(kind_menu_->IndexOf(marked_kind));
+        if (profile.selected_model.empty() ||
+            std::find(profile.models.begin(), profile.models.end(), profile.selected_model) == profile.models.end())
+            profile.selected_model = profile.models.empty() ? "" : profile.models.front();
+        return !profile.name.empty() && !profile.base_url.empty() && !profile.models.empty();
+    }
+
+    void LoadCurrent() {
+        const auto& profile = profiles_[current_];
+        name_->SetText(profile.name.c_str());
+        endpoint_->SetText(profile.base_url.c_str());
+        key_environment_->SetText(profile.api_key_environment.c_str());
+        api_key_->SetText(profile.api_key.c_str());
+        std::string model_lines;
+        for (const auto& model : profile.models) model_lines += model + "\n";
+        models_->SetText(model_lines.c_str());
+        if (auto* item = provider_menu_->ItemAt(static_cast<int32>(current_))) item->SetMarked(true);
+        if (auto* item = kind_menu_->ItemAt(static_cast<int32>(profile.kind))) item->SetMarked(true);
+    }
+
+    void RebuildProviderMenu() {
+        ClearMenu(provider_menu_);
+        for (std::size_t index = 0; index < profiles_.size(); ++index) {
+            BMessage* selected = new BMessage(kSettingsProviderChanged);
+            selected->AddInt32("index", static_cast<int32>(index));
+            provider_menu_->AddItem(new BMenuItem(profiles_[index].name.c_str(), selected));
+        }
+    }
+
+    void AddProvider() {
+        StoreCurrent();
+        const std::string id_base = "provider-" + std::to_string(std::time(nullptr));
+        std::string id = id_base;
+        for (std::size_t suffix = 2; std::any_of(profiles_.begin(), profiles_.end(),
+                 [&id](const kairo::ProviderProfile& profile) { return profile.id == id; }); ++suffix)
+            id = id_base + "-" + std::to_string(suffix);
+        kairo::ProviderProfile profile{
+            std::move(id),
+            "New Provider", kairo::ProviderKind::OpenAICompatible,
+            "https://openrouter.ai/api/v1", "KAIRO_API_KEY", {}, {"model-id"}, "model-id"};
+        profiles_.push_back(std::move(profile));
+        current_ = profiles_.size() - 1;
+        RebuildProviderMenu();
+        LoadCurrent();
+        name_->MakeFocus(true);
+    }
+
+    void DeleteProvider() {
+        if (profiles_.size() <= 1) return;
+        profiles_.erase(profiles_.begin() + static_cast<std::ptrdiff_t>(current_));
+        if (current_ >= profiles_.size()) current_ = profiles_.size() - 1;
+        RebuildProviderMenu();
+        LoadCurrent();
+    }
+
+    void SaveAll() {
+        if (!StoreCurrent()) {
+            (new BAlert("provider-invalid",
+                "Each provider needs a name, an API URL, and at least one model ID.",
+                "OK", nullptr, nullptr, B_WIDTH_AS_USUAL, B_STOP_ALERT))->Go();
+            return;
+        }
+        for (const auto& profile : profiles_) {
+            try {
+                if (profile.name.empty() || profile.base_url.empty() || profile.models.empty())
+                    throw std::runtime_error(
+                        "Each provider needs a name, an API URL, and at least one model ID.");
+                (void)kairo::CreateProvider(profile);
+            } catch (const std::exception& error) {
+                (new BAlert("provider-invalid", error.what(), "OK", nullptr, nullptr,
+                            B_WIDTH_AS_USUAL, B_STOP_ALERT))->Go();
+                return;
+            }
+        }
+        ProviderSettings settings{profiles_, profiles_[current_].id};
         BMessage saved(kSaveSettings);
-        saved.AddString("endpoint", endpoint_->Text());
-        saved.AddString("api_key", api_key_->Text());
+        AddSettingsToMessage(saved, settings);
         target_.SendMessage(&saved);
         PostMessage(B_QUIT_REQUESTED);
     }
 
-private:
     BMessenger target_;
+    std::vector<kairo::ProviderProfile> profiles_;
+    std::string selected_provider_id_;
+    std::size_t current_ = 0;
+    BMenuField* provider_;
+    BPopUpMenu* provider_menu_;
+    BMenuField* kind_;
+    BPopUpMenu* kind_menu_;
+    BTextControl* name_;
     BTextControl* endpoint_;
+    BTextControl* key_environment_;
     BTextControl* api_key_;
+    BTextView* models_;
 };
 
 class KairoWindow : public BWindow {
@@ -337,11 +598,12 @@ public:
         session_ = new BTextControl("session", "Resume session", "", nullptr);
         provider_settings_ = LoadProviderSettings();
         settings_ = new BButton("settings", "Settings...", new BMessage(kOpenSettings));
+        provider_menu_ = new BPopUpMenu("provider-options", true, true);
+        provider_ = new BMenuField("provider", "Provider", provider_menu_);
         model_menu_ = new BPopUpMenu("model-options", true, true);
-        for (const char* model : kModels)
-            model_menu_->AddItem(new BMenuItem(model, nullptr));
-        model_menu_->ItemAt(0)->SetMarked(true);
         model_ = new BMenuField("model", "Model", model_menu_);
+        RebuildProviderMenu();
+        RebuildModelMenu();
         approval_checkbox_ = new BCheckBox("approvals",
             "Ask before file writes and shell commands",
             new BMessage(kApprovalModeChanged));
@@ -350,7 +612,7 @@ public:
         transcript_->SetStylable(true);
         transcript_->MakeEditable(false);
         prompt_ = new BTextView("prompt");
-        status_ = new BStringView("status", ReadyStatus(provider_settings_.api_key.c_str()));
+        status_ = new BStringView("status", ReadyStatus(ActiveProfile()).c_str());
         send_ = new BButton("send", "Send", new BMessage(kSend));
         cancel_ = new BButton("cancel", "Cancel", new BMessage(kCancel));
         cancel_->SetEnabled(false);
@@ -358,8 +620,9 @@ public:
         auto* transcript_scroll = new BScrollView("transcript-scroll", transcript_, 0, false, true);
         auto* prompt_scroll = new BScrollView("prompt-scroll", prompt_, 0, false, true);
         project_->SetExplicitMinSize(BSize(650, B_SIZE_UNSET));
-        session_->SetExplicitMinSize(BSize(500, B_SIZE_UNSET));
-        model_->SetExplicitMinSize(BSize(300, B_SIZE_UNSET));
+        session_->SetExplicitMinSize(BSize(350, B_SIZE_UNSET));
+        provider_->SetExplicitMinSize(BSize(210, B_SIZE_UNSET));
+        model_->SetExplicitMinSize(BSize(280, B_SIZE_UNSET));
         transcript_scroll->SetExplicitMinSize(BSize(800, 320));
         prompt_scroll->SetExplicitMinSize(BSize(800, 140));
         auto* setup_box = new BBox("setup-box");
@@ -370,10 +633,11 @@ public:
                 .Add(project_, 1.0f)
                 .Add(choose_)
             .End()
-            .AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
-                .Add(session_, 1.0f)
-                .Add(model_)
-                .Add(settings_)
+                .AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
+                    .Add(session_, 1.0f)
+                    .Add(provider_)
+                    .Add(model_)
+                    .Add(settings_)
             .End()
             .AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
                 .Add(approval_checkbox_)
@@ -430,6 +694,8 @@ public:
             case kQuit: be_app->PostMessage(B_QUIT_REQUESTED); break;
             case kOpenSettings: OpenSettings(); break;
             case kSaveSettings: ReceiveSettings(message); break;
+            case kProviderChanged: ChangeProvider(message); break;
+            case kModelChanged: ChangeModel(message); break;
             case kApprovalModeChanged: ConfirmApprovalMode(); break;
             case B_ABOUT_REQUESTED: ShowAbout(); break;
             case B_REFS_RECEIVED: ReceiveProject(message); break;
@@ -441,6 +707,73 @@ public:
     }
 
 private:
+    static void ClearMenu(BMenu* menu) {
+        while (BMenuItem* item = menu->RemoveItem(static_cast<int32>(0))) delete item;
+    }
+
+    kairo::ProviderProfile& ActiveProfile() {
+        return provider_settings_.profiles[selected_provider_index_];
+    }
+
+    const kairo::ProviderProfile& ActiveProfile() const {
+        return provider_settings_.profiles[selected_provider_index_];
+    }
+
+    void RebuildProviderMenu() {
+        if (provider_settings_.profiles.empty())
+            provider_settings_.profiles = kairo::DefaultProviderProfiles();
+        selected_provider_index_ = 0;
+        for (std::size_t index = 0; index < provider_settings_.profiles.size(); ++index)
+            if (provider_settings_.profiles[index].id == provider_settings_.selected_provider_id)
+                selected_provider_index_ = index;
+        provider_settings_.selected_provider_id = ActiveProfile().id;
+        ClearMenu(provider_menu_);
+        for (std::size_t index = 0; index < provider_settings_.profiles.size(); ++index) {
+            BMessage* selected = new BMessage(kProviderChanged);
+            selected->AddInt32("index", static_cast<int32>(index));
+            provider_menu_->AddItem(new BMenuItem(
+                provider_settings_.profiles[index].name.c_str(), selected));
+        }
+        provider_menu_->ItemAt(static_cast<int32>(selected_provider_index_))->SetMarked(true);
+    }
+
+    void RebuildModelMenu() {
+        ClearMenu(model_menu_);
+        auto& profile = ActiveProfile();
+        if (profile.models.empty()) profile.models.push_back("model-id");
+        std::size_t selected = 0;
+        for (std::size_t index = 0; index < profile.models.size(); ++index) {
+            BMessage* changed = new BMessage(kModelChanged);
+            changed->AddInt32("index", static_cast<int32>(index));
+            model_menu_->AddItem(new BMenuItem(profile.models[index].c_str(), changed));
+            if (profile.models[index] == profile.selected_model) selected = index;
+        }
+        profile.selected_model = profile.models[selected];
+        model_menu_->ItemAt(static_cast<int32>(selected))->SetMarked(true);
+    }
+
+    void ChangeProvider(BMessage* message) {
+        if (worker_.joinable()) return;
+        int32 index = 0;
+        if (message->FindInt32("index", &index) != B_OK || index < 0
+            || static_cast<std::size_t>(index) >= provider_settings_.profiles.size()) return;
+        selected_provider_index_ = static_cast<std::size_t>(index);
+        provider_settings_.selected_provider_id = ActiveProfile().id;
+        RebuildModelMenu();
+        status_->SetText(ReadyStatus(ActiveProfile()).c_str());
+        SaveProviderSettings(provider_settings_);
+    }
+
+    void ChangeModel(BMessage* message) {
+        if (worker_.joinable()) return;
+        int32 index = 0;
+        auto& profile = ActiveProfile();
+        if (message->FindInt32("index", &index) != B_OK || index < 0
+            || static_cast<std::size_t>(index) >= profile.models.size()) return;
+        profile.selected_model = profile.models[static_cast<std::size_t>(index)];
+        SaveProviderSettings(provider_settings_);
+    }
+
     void AppendTranscript(const std::string& text, TranscriptStyle style,
                           bool bold = false) {
         if (text.empty()) return;
@@ -481,7 +814,7 @@ private:
         if (worker_.joinable()) return;
         session_->SetText("");
         transcript_->SetText("");
-        status_->SetText(ReadyStatus(provider_settings_.api_key.c_str()));
+        status_->SetText(ReadyStatus(ActiveProfile()).c_str());
         prompt_->MakeFocus(true);
     }
 
@@ -498,30 +831,23 @@ private:
     }
 
     void ReceiveSettings(BMessage* message) {
-        const char* endpoint = nullptr;
-        const char* api_key = nullptr;
-        if (message->FindString("endpoint", &endpoint) != B_OK || !endpoint || !*endpoint)
-            return;
-        message->FindString("api_key", &api_key);
-        ProviderSettings updated{endpoint, api_key ? api_key : ""};
         try {
-            (void)kairo::OpenAIProvider(kairo::OpenAIConfig{
-                updated.endpoint, "KAIRO_API_KEY", 120, {}});
+            ProviderSettings updated = SettingsFromMessage(*message);
+            if (updated.profiles.empty()) throw std::runtime_error("No providers were supplied");
+            for (const auto& profile : updated.profiles) (void)kairo::CreateProvider(profile);
+            if (SaveProviderSettings(updated) != B_OK)
+                throw std::runtime_error("Kairo could not save the provider settings");
+            provider_settings_ = std::move(updated);
+            RebuildProviderMenu();
+            RebuildModelMenu();
         } catch (const std::exception& error) {
-            WriteLog("WARNING", "Invalid provider URL rejected");
+            WriteLog("WARNING", "Invalid provider settings rejected");
             (new BAlert("settings-error", error.what(), "OK", nullptr, nullptr,
                         B_WIDTH_AS_USUAL, B_STOP_ALERT))->Go();
             return;
         }
-        if (SaveProviderSettings(updated) != B_OK) {
-            WriteLog("ERROR", "Provider settings could not be saved");
-            (new BAlert("settings-error", "Kairo could not save the provider settings.",
-                        "OK", nullptr, nullptr, B_WIDTH_AS_USUAL, B_STOP_ALERT))->Go();
-            return;
-        }
-        provider_settings_ = std::move(updated);
         WriteLog("INFO", "Provider settings saved");
-        status_->SetText(ReadyStatus(provider_settings_.api_key.c_str()));
+        status_->SetText(ReadyStatus(ActiveProfile()).c_str());
     }
 
     void ConfirmApprovalMode() {
@@ -573,16 +899,16 @@ private:
         std::string project = project_->Text();
         std::string prompt(prompt_->Text(), prompt_->TextLength());
         if (project.empty() || prompt.empty()) { status_->SetText("Choose a project and enter a prompt"); return; }
-        std::string api_key = provider_settings_.api_key;
-        const char* environment_key = std::getenv("KAIRO_API_KEY");
+        kairo::ProviderProfile profile = ActiveProfile();
+        std::string api_key = profile.api_key;
+        const char* environment_key = profile.api_key_environment.empty()
+            ? nullptr : std::getenv(profile.api_key_environment.c_str());
         if (api_key.empty() && (!environment_key || !*environment_key)) {
             WriteLog("WARNING", "Run blocked because no API key is configured");
             status_->SetText("Configure an API key in Settings");
             OpenSettings();
             return;
         }
-        std::string endpoint = provider_settings_.endpoint;
-        if (endpoint.empty()) endpoint = "https://api.openai.com/v1";
         prompt_->SetText("");
         AppendTranscript("\nYou: ", TranscriptStyle::User, true);
         AppendTranscript(prompt, TranscriptStyle::User);
@@ -592,17 +918,25 @@ private:
         BMessenger target(this);
         std::string session_id = session_->Text();
         BMenuItem* selected_model = model_menu_->FindMarked();
-        std::string model = selected_model ? selected_model->Label() : kModels[0];
+        std::string model = selected_model ? selected_model->Label() : profile.selected_model;
+        profile.selected_model = model;
         bool require_approvals = approval_checkbox_->Value() == B_CONTROL_ON;
-        WriteLog("INFO", std::string("Run started with model ") + model);
+        WriteLog("INFO", std::string("Run started with provider ") + profile.name
+            + " and model " + model);
         worker_ = std::thread([this, target, project, prompt, session_id, model,
-                               endpoint, api_key, require_approvals]() mutable {
+                               profile, api_key, require_approvals]() mutable {
             bool engine_started = false;
             try {
                 kairo::SessionStore store(SessionDirectory());
-                kairo::Session session = session_id.empty() ? store.Create(project, model) : store.Load(session_id);
+                kairo::Session session = session_id.empty()
+                    ? store.Create(project, model, profile.id) : store.Load(session_id);
                 if (fs::canonical(session.project) != fs::canonical(project))
                     throw std::runtime_error("The resumed session belongs to another project");
+                if (!session.provider.empty() && session.provider != profile.id) {
+                    WriteLog("INFO", std::string("Resumed session provider changed from ")
+                        + session.provider + " to " + profile.id);
+                }
+                session.provider = profile.id;
                 if (session.model != model) {
                     WriteLog("INFO", std::string("Resumed session model changed from ")
                         + session.model + " to " + model);
@@ -617,11 +951,12 @@ private:
                     "the project explicitly requires it. Treat command-not-found and linker diagnostics as "
                     "failures even if a compound shell command reports exit code 0. Writes and shell commands "
                     "require approval.", {}, {}});
-                auto provider = std::make_shared<kairo::OpenAIProvider>(kairo::OpenAIConfig{
-                    endpoint, "KAIRO_API_KEY", 120, api_key});
+                profile.api_key = api_key;
+                auto provider = kairo::CreateProvider(profile);
                 kairo::Limits limits;
                 kairo::AgentEngine engine(provider,
-                    kairo::Workspace(project, limits.max_tool_output_bytes, {"KAIRO_API_KEY"}),
+                    kairo::Workspace(project, limits.max_tool_output_bytes,
+                                     {profile.api_key_environment}),
                     store, limits);
                 auto approval = [this, target, require_approvals](const kairo::ProposedAction& action) {
                     if (!require_approvals) return true;
@@ -759,6 +1094,7 @@ private:
         project_->SetEnabled(!running);
         choose_->SetEnabled(!running);
         session_->SetEnabled(!running);
+        provider_->SetEnabled(!running);
         model_->SetEnabled(!running);
         approval_checkbox_->SetEnabled(!running);
         settings_->SetEnabled(!running);
@@ -781,6 +1117,8 @@ private:
     BButton* choose_;
     BTextControl* session_;
     BButton* settings_;
+    BMenuField* provider_;
+    BPopUpMenu* provider_menu_;
     BMenuField* model_;
     BPopUpMenu* model_menu_;
     BCheckBox* approval_checkbox_;
@@ -795,6 +1133,7 @@ private:
     std::vector<std::shared_ptr<PendingApproval>> approvals_;
     BFilePanel* project_panel_ = nullptr;
     ProviderSettings provider_settings_;
+    std::size_t selected_provider_index_ = 0;
     BMessenger settings_messenger_;
 };
 

@@ -147,7 +147,7 @@ json::Value MessageJson(const Message& message) {
     return json::Value::Object(std::move(object));
 }
 
-json::Value RequestJson(const ProviderRequest& request) {
+json::Value RequestJson(const ProviderRequest& request, bool anthropic_compatibility) {
     std::vector<json::Value> messages;
     for (const auto& message : request.messages) messages.push_back(MessageJson(message));
     auto required = [](const std::string& value) { return std::vector<json::Value>{json::Value::String(value)}; };
@@ -162,10 +162,15 @@ json::Value RequestJson(const ProviderRequest& request) {
     tools.push_back(ToolDefinition("run_shell", "Run a shell command after user approval.",
         {{"command", StringProperty("Exact shell command")}, {"working_directory", StringProperty("Literal project-relative directory; use '.' for the project root")}},
         {json::Value::String("command")}));
-    return json::Value::Object({{"model", json::Value::String(request.model)},
-                                {"messages", json::Value::Array(std::move(messages))},
-                                {"tools", json::Value::Array(std::move(tools))},
-                                {"stream", json::Value::Boolean(true)}});
+    std::map<std::string, json::Value> body{
+        {"model", json::Value::String(request.model)},
+        {"messages", json::Value::Array(std::move(messages))},
+        {"tools", json::Value::Array(std::move(tools))},
+        {"stream", json::Value::Boolean(true)},
+    };
+    if (anthropic_compatibility)
+        body["max_tokens"] = json::Value::Number(8192);
+    return json::Value::Object(std::move(body));
 }
 #endif
 
@@ -196,7 +201,7 @@ ProviderResponse OpenAIProvider::Complete(const ProviderRequest& request, const 
     if (key.empty())
         throw std::runtime_error("API key is not configured in the GUI or environment variable: "
                                  + config_.api_key_environment);
-    const std::string body = json::Encode(RequestJson(request));
+    const std::string body = json::Encode(RequestJson(request, config_.anthropic_compatibility));
     ProviderResponse response;
     std::map<std::size_t, ToolCall> calls;
     std::string error_body;

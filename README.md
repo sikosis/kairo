@@ -8,7 +8,7 @@ This checkout was implemented and tested on macOS because no Haiku host or cross
 
 - `core/include/kairo` and `core/src`: provider-neutral messages and tool calls, typed events, cancellation, bounded agent loop, SSE decoder, OpenAI-compatible Chat Completions adapter, project-scoped tools, approvals, and versioned session persistence.
 - `apps/cli`: a thin interactive client and deterministic `--fake` mode.
-- `apps/gui`: a native `BApplication` and `BWindow` with a menu bar, project and session controls, model menu, labelled transcript and multiline prompt, Send, Cancel, status, and asynchronous approval alerts.
+- `apps/gui`: a native `BApplication` and `BWindow` with a menu bar, project and session controls, separate provider and model pop-up menus, labelled transcript and multiline prompt, Send, Cancel, status, and asynchronous approval alerts.
 - `tests`: deterministic coverage for fragmented SSE input, fragmented tool arguments, approvals, denials, path escapes, cancellation, session resume, and restrictive session-file permissions.
 - `Makefile`: builds with the installed C++17 compiler and enables libcurl by default, detecting its flags with `pkg-config` or `curl-config` before falling back to `-lcurl`. On Haiku it also builds the native GUI and links it with the Application Kit through `-lbe`.
 
@@ -18,7 +18,7 @@ This checkout was implemented and tested on macOS because no Haiku host or cross
 
 The Haiku window starts the engine on a worker thread. It sends copied event fields to the window with `BMessenger` and `BMessage`, and only the window looper updates views. Approval requests create asynchronous `BAlert` instances; the worker waits on the associated request, not the window looper. Cancellation is shared with the HTTP transfer and command runner. Closing the window cancels work, denies pending approvals, and prevents the worker from retaining a window pointer.
 
-The OpenAI-compatible adapter uses `POST {base_url}/chat/completions` with streaming enabled. Its SSE decoder accepts arbitrary network fragmentation and assembles tool-call arguments by tool index. The CLI reads the API key from its configured environment variable. The GUI can instead read it from its saved provider settings. Credentials are not copied into requests stored on disk, logs, errors, or session files.
+Provider profiles keep the service type, base URL, credential source, model list, and selected model together. The OpenAI-compatible adapter uses `POST {base_url}/chat/completions` with streaming enabled. Anthropic profiles use Anthropic's OpenAI SDK compatibility endpoint and include the required token limit. Its SSE decoder accepts arbitrary network fragmentation and assembles tool-call arguments by tool index. The CLI reads the API key from its configured environment variable. The GUI can instead read it from a saved provider profile. Credentials are not copied into requests stored on disk, logs, errors, or session files.
 
 ## Build prerequisites
 
@@ -29,6 +29,7 @@ The build needs:
 - `make`
 - libcurl development files for the live provider (`pkg-config` or `curl-config` is recommended for discovery)
 - Haiku development headers plus the `be` and `tracker` libraries for the GUI
+- `hvif_tools` on Haiku to convert and embed the application icon (the GUI still builds without it)
 
 On Haiku, inspect the actual package names exposed by the configured repository before installing anything:
 
@@ -41,6 +42,7 @@ The current HaikuPorts curl recipe provides `curl_devel`, `devel:libcurl`, `curl
 
 ```sh
 pkgman install curl_devel
+pkgman install hvif_tools
 ```
 
 Haiku's package repositories and package naming can vary by architecture and release, so use the search results on the target system as the authority. References: [Haiku API documentation](https://www.haiku-os.org/docs/api/), [Haiku source](https://github.com/haiku/haiku), and [HaikuPorts curl recipe](https://github.com/haikuports/haikuports/tree/master/net-misc/curl).
@@ -58,7 +60,9 @@ make test
 make gui
 ```
 
-The Haiku x86_64 GUI build uses the bundled libcurl 8.21.0 library and headers in `vendor/haiku-x86_64`. The build adds its `include` directory automatically, copies `libcurl.so`, `libcurl.so.4`, and `libcurl.so.4.8.0` beside `build/kairo-gui`, and gives the executable an `$ORIGIN` runtime search path. Curl's other runtime dependencies still come from the Haiku installation.
+The Haiku x86_64 GUI build uses the bundled libcurl 8.21.0 library and headers in `vendor/haiku-x86_64`. This is intentional because the libcurl package available from the tested HaikuPorts repository was older than the version needed by this checkout. The build adds its `include` directory automatically, copies `libcurl.so`, `libcurl.so.4`, and `libcurl.so.4.8.0` beside `build/kairo-gui`, and gives the executable an `$ORIGIN` runtime search path. Curl's other runtime dependencies still come from the Haiku installation.
+
+On Haiku the GUI build also embeds the application signature, version, and icon. With `hvif_tools` installed, `resources/kairo-icon-master.png` is converted to HVIF and attached to the executable; otherwise the build succeeds with metadata only and prints an icon warning. See `resources/README.md` for the Icon-O-Matic workflow.
 
 To rebuild everything:
 
@@ -89,7 +93,7 @@ Useful session commands:
 ./build/kairo-cli --project /boot/home/src/example --resume SESSION_ID
 ```
 
-Sessions default to `~/config/settings/Kairo/sessions` on Haiku and `~/.local/share/kairo/sessions` elsewhere. Directories are set to mode `0700` and files to `0600`. The JSON schema has an explicit `version` field. Sessions include the project path, model, messages, tool calls, and results, but never credentials.
+Sessions default to `~/config/settings/Kairo/sessions` on Haiku and `~/.local/share/kairo/sessions` elsewhere. Directories are set to mode `0700` and files to `0600`. The JSON schema has an explicit `version` field. Sessions include the project path, provider-profile ID, model, messages, tool calls, and results, but never credentials.
 
 Use the deterministic provider to exercise approvals without a network connection or API key:
 
@@ -99,14 +103,19 @@ Use the deterministic provider to exercise approvals without a network connectio
 
 A prompt containing `read` proposes an automatic read of `README.md`; one containing `shell` proposes an approved shell command; other prompts propose an approved write to `kairo-demo.txt`.
 
-## GUI configuration
+## GUI providers and models
 
-The GUI keeps provider configuration in a separate **Settings > Provider Settings...** window. The same window is also available from the **Settings...** button beside the model selector. It uses these environment variables as initial or fallback values:
+The main window has separate native `BPopUpMenu` selectors for providers and models. Selecting a provider rebuilds the model menu from that profile and both selections are saved immediately. **Settings > Provider Settings...** opens a dedicated profile editor where providers can be added, removed, renamed, and configured with a type, API base URL, environment-variable name, masked API key, and an editable list of API model IDs.
 
-- `KAIRO_API_KEY`: required API key
-- `KAIRO_BASE_URL`: optional compatible base URL; defaults to `https://api.openai.com/v1`
+Kairo supplies three editable starting profiles:
 
-The project field defaults to `/boot/home/work`. Choose a project directory and a model (`qwen/qwen3.8-27b`, `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, `gpt-4.1-mini`, `gpt-4.1`, `gpt-4.1-nano`, `o4-mini`, or `o3`) in the top controls; `qwen/qwen3.8-27b` is selected by default. Open Provider Settings to enter an OpenAI-compatible base URL and API key, then press Save. Kairo stores them in `~/config/settings/Kairo/provider_settings` on Haiku, with the Kairo settings directory restricted to mode `0700` and the file to `0600`. The key is masked in the settings window and is never written to session files or log output. Leave the session field blank to create a session, or paste a session ID to resume one for the same canonical project. When resuming, the model selected in the dropdown replaces the model saved in that session for the next request and subsequent saves. Kairo only fills the session field after the session has successfully been saved. The Send button is disabled while a run is active; Cancel signals both the provider transfer and any active shell child process.
+- **OpenAI** — `https://api.openai.com/v1`, `OPENAI_API_KEY`, with current GPT-5.6, GPT-5.5, and GPT-4.1 model choices.
+- **Anthropic** — `https://api.anthropic.com/v1`, `ANTHROPIC_API_KEY`, with Claude Opus 5.5, Sonnet 5, and Haiku 4.5 model IDs. This currently uses Anthropic's OpenAI SDK compatibility layer; a future native Anthropic transport can be added behind the existing provider type without changing the UI or saved profiles.
+- **Custom / OpenRouter** — an arbitrary OpenAI-compatible service, initially populated with the Qwen and GPT-OSS model IDs previously used by this project.
+
+Model availability is account- and provider-specific, so every list is editable rather than being treated as an exhaustive catalogue. Use the exact model ID reported by the provider. A [ChatGPT subscription does not include OpenAI API access or billing](https://help.openai.com/en/articles/9039756-managing-billing-for-chatgpt-and-the-api-platform), and a [Claude.ai subscription does not include Anthropic Console API usage](https://support.anthropic.com/en/articles/9876003-i-subscribe-to-a-paid-claude-ai-plan-why-do-i-have-to-pay-separately-for-api-usage-on-console). Kairo therefore accepts API keys; it does not ask for web-account passwords, browser cookies, or subscription login tokens. Anthropic documents its [OpenAI SDK compatibility layer](https://platform.claude.com/docs/en/cli-sdks-libraries/libraries/openai-sdk) as a migration and testing path; a native Anthropic Messages transport remains the appropriate future implementation for full feature coverage.
+
+The project field defaults to `/boot/home/work`. Kairo stores all provider profiles in `~/config/settings/Kairo/provider_settings` on Haiku, with the Kairo settings directory restricted to mode `0700` and the file to `0600`. Saved keys are masked in the settings window and are never written to session files or log output. Prefer an environment-variable name with the key field left blank when practical. Leave the session field blank to create a session, or paste a session ID to resume one for the same canonical project. Sessions record both the provider-profile ID and model; explicitly changing either selector updates them on the next save. Kairo only fills the session field after the session has successfully been saved. The Send button is disabled while a run is active; Cancel signals both the provider transfer and any active shell child process.
 
 The GUI writes a timestamped diagnostic log to `~/config/settings/Kairo/kairo.log`. The log file uses mode `0600` and records application, settings, and run lifecycle events without recording API keys, URLs, prompts, model responses, or tool output. Detailed run errors remain visible in the conversation window without copying provider response bodies into the log.
 
@@ -176,6 +185,12 @@ JSON parsing, secure temporary files, shell-environment filtering, terminal
 control-character filtering, and cancellation-safe GUI approval handling.
 
 ## Haiku verification still required
+
+On 1 October 2026, the provider-profile and session-persistence changes passed
+`make -B check` with libcurl enabled and with `KAIRO_USE_CURL=0`. The source tree
+also passed the credential-pattern scan and `git diff --check`. The native GUI,
+HVIF conversion, and resource embedding still need the target-system checks below
+because this development host is macOS rather than Haiku.
 
 Run these steps on the target Haiku installation before calling the native release complete:
 
