@@ -19,9 +19,24 @@ CRYPTO_CFLAGS := $(shell $(PKG_CONFIG) --cflags libcrypto 2>/dev/null || $(PKG_C
 CRYPTO_LIBS := $(shell $(PKG_CONFIG) --libs libcrypto 2>/dev/null || $(PKG_CONFIG) --libs openssl 2>/dev/null)
 CRYPTO_LINK_LIBS := $(if $(strip $(CRYPTO_LIBS)),$(CRYPTO_LIBS),-lcrypto)
 CRYPTO_AVAILABLE := $(shell probe=/tmp/kairo-crypto-probe.$$$$; \
-	printf '%s\n' '\#include <openssl/evp.h>' 'int main(){EVP_MD_CTX* c=EVP_MD_CTX_new(); EVP_MD_CTX_free(c);}' | \
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(CRYPTO_CFLAGS) -x c++ - $(CRYPTO_LINK_LIBS) -o $$probe >/dev/null 2>&1 && printf 1; \
+	printf '%s\n' 'int main(){OSSL_PARAM_BLD* b=OSSL_PARAM_BLD_new(); OSSL_PARAM_BLD_free(b); EVP_PKEY_CTX* c=EVP_PKEY_CTX_new_from_name(nullptr,"RSA",nullptr); EVP_PKEY_CTX_free(c);}' | \
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(CRYPTO_CFLAGS) -include openssl/evp.h -include openssl/param_build.h -x c++ - $(CRYPTO_LINK_LIBS) -o $$probe >/dev/null 2>&1 && printf 1; \
 	rm -f $$probe)
+
+# ChatGPT sign-in is a first-class GUI feature, so a Haiku GUI build must not
+# silently compile it out. Keep `make clean` usable before the dependency is
+# installed, while failing all targets that produce or verify the GUI.
+REQUESTED_GOALS := $(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)
+ifeq ($(UNAME_S),Haiku)
+ifeq ($(KAIRO_USE_CURL),1)
+ifneq ($(filter all gui check build/kairo-gui,$(REQUESTED_GOALS)),)
+ifeq ($(CRYPTO_AVAILABLE),)
+$(error OpenSSL 3 development files are required for ChatGPT sign-in. Run 'pkgman install devel:libcrypto pkgconfig', then rebuild with 'make clean && make gui')
+endif
+endif
+endif
+endif
+
 ifeq ($(KAIRO_USE_CURL),1)
 CPPFLAGS += -DKAIRO_HAS_CURL=1 -DKAIRO_HAS_CRYPTO=$(if $(CRYPTO_AVAILABLE),1,0) $(CURL_CFLAGS) $(if $(CRYPTO_AVAILABLE),$(CRYPTO_CFLAGS))
 PROVIDER_LIBS := $(if $(strip $(CURL_LIBS)),$(CURL_LIBS),-lcurl) $(if $(CRYPTO_AVAILABLE),$(CRYPTO_LINK_LIBS))

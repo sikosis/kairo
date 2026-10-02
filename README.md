@@ -48,12 +48,13 @@ A typical setup is:
 pkgman install git
 pkgman install curl
 pkgman install ca_root_certificates
-pkgman install openssl3_devel
+pkgman install devel:libcrypto pkgconfig
 pkgman install hvif_tools
 ```
 
 `hvif_tools` is optional. Without it the application builds, but the icon may not
-be embedded.
+be embedded. OpenSSL 3 is not optional: `make gui` stops with an installation
+command if the compiler cannot find and link the OpenSSL 3 development files.
 
 ### Note about HaikuPorts libcurl
 
@@ -82,6 +83,18 @@ Run it with:
 ```sh
 ./build/kairo-gui
 ```
+
+If an older build displays “built without OpenSSL support,” install the missing
+development package and completely rebuild it:
+
+```sh
+pkgman install devel:libcrypto pkgconfig
+make clean
+make gui
+```
+
+The new compile commands must contain `-DKAIRO_HAS_CRYPTO=1`. If they do not,
+check Haiku's package metadata with `pkg-config --cflags --libs libcrypto`.
 
 To build everything and run the automated tests:
 

@@ -94,7 +94,9 @@ and expiry under `~/config/settings/Kairo/chatgpt_credentials.json` with mode
 
 The Makefile requires a C++17 compiler and POSIX process APIs. It enables libcurl
 by default, discovers flags through `pkg-config` or `curl-config`, then falls back
-to `-lcurl`.
+to `-lcurl`. On Haiku, a GUI build also compiles and links a probe for the
+OpenSSL 3 APIs used to validate ChatGPT tokens. The build fails with an actionable
+dependency error instead of producing a GUI with ChatGPT sign-in compiled out.
 
 Useful targets:
 
