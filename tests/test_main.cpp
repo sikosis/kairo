@@ -1,5 +1,4 @@
 #include "kairo/agent_engine.h"
-#include "kairo/codex_runner.h"
 #include "kairo/openai_provider.h"
 #include "kairo/provider_profile.h"
 #include "kairo/sse_decoder.h"
@@ -110,19 +109,16 @@ void TestProviderUrlPolicy() {
 
 void TestProviderProfiles() {
     const auto profiles = kairo::DefaultProviderProfiles();
-    Check(profiles.size() >= 4, "default provider profiles");
+    Check(profiles.size() >= 3, "default provider profiles");
     auto find = [&](const std::string& id) -> const kairo::ProviderProfile& {
         auto found = std::find_if(profiles.begin(), profiles.end(),
             [&](const kairo::ProviderProfile& profile) { return profile.id == id; });
         if (found == profiles.end()) throw std::runtime_error("missing provider profile: " + id);
         return *found;
     };
-    const auto& codex = find("codex");
     const auto& openai = find("openai");
     const auto& anthropic = find("anthropic");
     const auto& custom = find("custom");
-    Check(codex.kind == kairo::ProviderKind::CodexChatGPT
-          && kairo::ProviderUsesCodexAppServer(codex.kind), "Codex profile defaults");
     Check(openai.kind == kairo::ProviderKind::OpenAI && !openai.models.empty(),
           "OpenAI profile defaults");
     Check(anthropic.kind == kairo::ProviderKind::AnthropicCompatibility &&
@@ -131,51 +127,6 @@ void TestProviderProfiles() {
     Check(kairo::ParseProviderKind(kairo::ProviderKindId(custom.kind)) == custom.kind,
           "provider kind round trip");
     Check(kairo::CreateProvider(anthropic) != nullptr, "provider factory");
-}
-
-void TestCodexAppServerProtocol() {
-    TemporaryDirectory temporary;
-    fs::path project = temporary.path() / "project";
-    fs::path sessions = temporary.path() / "sessions";
-    fs::create_directories(project);
-    fs::path fake = temporary.path() / "fake-codex";
-    std::ofstream script(fake);
-    script << R"SCRIPT(#!/bin/sh
-test -z "$KAIRO_TEST_API_KEY" || exit 8
-IFS= read -r initialize
-IFS= read -r initialized
-IFS= read -r thread_start
-printf '%s\n' '{"id":2,"result":{"thread":{"id":"thr_test"}}}'
-IFS= read -r turn_start
-printf '%s\n' '{"id":41,"method":"item/commandExecution/requestApproval","params":{"itemId":"cmd_1","command":"printf ok","cwd":".","reason":"protocol test","startedAtMs":1,"threadId":"thr_test","turnId":"turn_test"}}'
-IFS= read -r approval
-case "$approval" in *'"accept"'*) ;; *) exit 9 ;; esac
-printf '%s\n' '{"method":"item/agentMessage/delta","params":{"delta":"hello from Codex","itemId":"msg_1","threadId":"thr_test","turnId":"turn_test"}}'
-printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thr_test","turn":{"id":"turn_test","items":[],"status":"completed"}}}'
-while IFS= read -r ignored; do :; done
-)SCRIPT";
-    script.close();
-    ::chmod(fake.c_str(), 0700);
-
-    kairo::SessionStore store(sessions);
-    kairo::Session session = store.Create(project, "Use Codex default", "codex");
-    bool asked = false;
-    std::string streamed;
-    kairo::CodexRunner runner({fake.string()});
-    ::setenv("KAIRO_TEST_API_KEY", "must-not-reach-codex", 1);
-    const std::string answer = runner.Run(session, project, "say hello", true,
-        [&](const kairo::ProposedAction& action) {
-            asked = action.preview.find("printf ok") != std::string::npos;
-            return true;
-        },
-        [&](const kairo::EngineEvent& event) {
-            if (event.type == kairo::EventType::TextDelta) streamed += event.text;
-        }, kairo::CancellationToken{}, store);
-    ::unsetenv("KAIRO_TEST_API_KEY");
-    Check(asked, "Codex approval request routed to Kairo");
-    Check(answer == "hello from Codex" && streamed == answer, "Codex response streamed");
-    Check(session.backend_thread_id == "thr_test", "Codex thread ID captured");
-    Check(store.Load(session.id).backend_thread_id == "thr_test", "Codex thread ID persisted");
 }
 
 void TestJsonUnicode() {
@@ -302,7 +253,6 @@ int main() {
         TestInputSafetyLimits();
         TestProviderUrlPolicy();
         TestProviderProfiles();
-        TestCodexAppServerProtocol();
         TestJsonUnicode();
         TestWorkspacePolicy();
         TestAgentApprovalAndResume();

@@ -24,7 +24,6 @@ endif
 
 CORE_SOURCES := \
 	core/src/agent_engine.cpp \
-	core/src/codex_runner.cpp \
 	core/src/events.cpp \
 	core/src/json.cpp \
 	core/src/model.cpp \

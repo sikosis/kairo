@@ -3,7 +3,6 @@
 #endif
 
 #include "kairo/agent_engine.h"
-#include "kairo/codex_runner.h"
 #include "kairo/openai_provider.h"
 #include "kairo/provider_profile.h"
 
@@ -88,8 +87,6 @@ bool ProfileHasKey(const kairo::ProviderProfile& profile) {
 }
 
 std::string ReadyStatus(const kairo::ProviderProfile& profile) {
-    if (kairo::ProviderUsesCodexAppServer(profile.kind))
-        return "Codex - requires a signed-in executable";
     return ProfileHasKey(profile)
         ? "Ready - " + profile.name + " key configured"
         : "Ready - " + profile.name + " key missing";
@@ -358,7 +355,7 @@ public:
         }
         kind_ = new BMenuField("settings-kind", "Type", kind_menu_);
         name_ = new BTextControl("settings-name", "Name", "", nullptr);
-        endpoint_ = new BTextControl("settings-endpoint", "API URL / executable", "", nullptr);
+        endpoint_ = new BTextControl("settings-endpoint", "API URL", "", nullptr);
         key_environment_ = new BTextControl("settings-key-environment", "Key variable", "", nullptr);
         api_key_ = new BTextControl("settings-api-key", "API key", "", nullptr);
         api_key_->TextView()->HideTyping(true);
@@ -491,13 +488,11 @@ private:
     }
 
     void UpdateKindControls() {
-        const bool codex = kairo::ProviderUsesCodexAppServer(profiles_[current_].kind);
-        endpoint_->SetLabel(codex ? "Codex executable" : "API URL");
-        key_environment_->SetEnabled(!codex);
-        api_key_->SetEnabled(!codex);
-        credential_note_->SetText(codex
-            ? "Uses your ChatGPT plan. Install Codex and run 'codex login' once before using it."
-            : "API keys are stored locally with owner-only permissions; prefer an environment variable.");
+        endpoint_->SetLabel("API URL");
+        key_environment_->SetEnabled(true);
+        api_key_->SetEnabled(true);
+        credential_note_->SetText(
+            "API keys are stored locally with owner-only permissions; prefer an environment variable.");
     }
 
     void RebuildProviderMenu() {
@@ -545,8 +540,7 @@ private:
         for (const auto& profile : profiles_) {
             try {
                 kairo::ValidateProviderProfile(profile);
-                if (!kairo::ProviderUsesCodexAppServer(profile.kind))
-                    (void)kairo::CreateProvider(profile);
+                (void)kairo::CreateProvider(profile);
             } catch (const std::exception& error) {
                 (new BAlert("provider-invalid", error.what(), "OK", nullptr, nullptr,
                             B_WIDTH_AS_USUAL, B_STOP_ALERT))->Go();
@@ -960,7 +954,6 @@ private:
                 if (!session.provider.empty() && session.provider != profile.id) {
                     WriteLog("INFO", std::string("Resumed session provider changed from ")
                         + session.provider + " to " + profile.id);
-                    session.backend_thread_id.clear();
                 }
                 session.provider = profile.id;
                 if (session.model != model) {
@@ -988,17 +981,6 @@ private:
                     update.AddString("session", event.session_id.c_str());
                     target.SendMessage(&update);
                 };
-                if (kairo::ProviderUsesCodexAppServer(profile.kind)) {
-                    kairo::CodexRunner runner({profile.base_url});
-                    engine_started = true;
-                    runner.Run(session, project, prompt, require_approvals, approval, events,
-                               cancellation_, store);
-                    BMessage done(kEngineEvent);
-                    done.AddInt32("type", static_cast<int32>(kairo::EventType::Completed));
-                    done.AddBool("worker_done", true);
-                    target.SendMessage(&done);
-                    return;
-                }
                 if (session.messages.empty()) session.messages.push_back({kairo::Role::System,
                     "You are Kairo, a local coding assistant running natively on Haiku. Reads and searches "
                     "stay inside the selected project. Use literal project-relative paths and '.' for the "

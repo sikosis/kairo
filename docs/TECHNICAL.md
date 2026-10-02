@@ -7,8 +7,7 @@ and using Kairo.
 ## Repository layout
 
 - `core/include/kairo` and `core/src` contain the portable engine, provider
-  adapters, Codex app-server client, workspace policy, events, cancellation, and
-  session persistence.
+  adapters, workspace policy, events, cancellation, and session persistence.
 - `apps/cli` contains the portable command-line client and deterministic fake
   provider mode.
 - `apps/gui` contains the native Haiku `BApplication` and `BWindow` interface.
@@ -34,33 +33,24 @@ assembles fragmented tool-call arguments by tool index. Anthropic profiles
 currently use Anthropic's OpenAI SDK compatibility endpoint and include the
 required token limit.
 
-### Codex backend
+### Planned ChatGPT subscription backend
 
-Codex is an agent backend, not a raw HTTP `Provider`. `CodexRunner` launches
-`codex app-server --listen stdio://` and exchanges newline-delimited JSON over
-stdin and stdout. It:
+Kairo must not depend on the Codex command-line program: it is not available on
+Haiku, and Kairo exists to provide a native Haiku client. The previously explored
+`codex app-server` adapter was removed for that reason.
 
-- performs the app-server initialization handshake;
-- creates or resumes a Codex thread;
-- streams `item/agentMessage/delta` events;
-- maps command and file-change approval requests into Kairo approval dialogs;
-- cancels and terminates the app-server process group safely; and
-- stores the opaque Codex thread ID in the Kairo session.
-
-When Kairo approvals are enabled, Codex starts with a read-only sandbox and an
-on-request approval policy. When approvals are disabled, it uses workspace-write
-with no approval prompts. Prompt, protocol-line, response, diagnostic, and tool
-output sizes are bounded.
-
-The current integration uses the account already managed by `codex login`; Kairo
-does not open or parse Codex credential files. Direct in-app Sign in with ChatGPT,
-refresh-token storage, account switching, and dynamic `model/list` population are
-future work. References:
+The intended ChatGPT Plus and Pro integration is an in-app **Continue with
+ChatGPT** flow. Kairo will dynamically register as an open-source client, open the
+authorization page, receive the loopback callback, validate the returned identity,
+and securely retain rotating OAuth credentials. It will then discover eligible
+models and call the Responses API directly. This provider must not be exposed as
+working until the complete authorization, token refresh, sign-out, and direct
+inference path is implemented and tested on Haiku. References:
 
 - [Sign in with ChatGPT quickstart](https://developers.openai.com/siwc/quickstart)
 - [Open-source registration and sign-in](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
-- [Codex app-server for ChatGPT-plan usage](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server)
-- [Codex app-server protocol](https://developers.openai.com/codex/app-server)
+- [Models and direct inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
+- [Token storage and refresh](https://developers.openai.com/siwc/token-sharing-open-source/token-reference)
 
 ### Haiku GUI threading
 
@@ -75,7 +65,7 @@ prompts, assistant text, tool names, fixed-width tool output, denials, and error
 
 ## Provider profiles and saved state
 
-Provider profiles store an ID, display name, provider kind, endpoint or executable,
+Provider profiles store an ID, display name, provider kind, API endpoint,
 credential source, editable model list, and selected model. Existing settings are
 migrated and newly supplied default profiles are merged by stable ID.
 
@@ -88,7 +78,6 @@ Sessions include:
 - canonical project path;
 - provider-profile ID and selected model;
 - messages and tool results; and
-- an optional backend thread ID for Codex.
 
 Credentials are not stored in session files.
 
@@ -166,9 +155,7 @@ binary files.
 
 Writes use a temporary sibling followed by rename. Shell commands receive a
 filtered environment that removes the configured key variable, credential-shaped
-variables, authentication-agent sockets, and askpass helpers. Codex app-server is
-started with the same credential-shaped filtering. Codex authentication continues
-to work through its protected on-disk account state, not inherited token variables.
+variables, authentication-agent sockets, and askpass helpers.
 
 This is not a complete operating-system sandbox. An approved shell command runs
 with the current user's file permissions, so user review remains a primary safety
@@ -185,7 +172,6 @@ The portable suite covers:
 - binary-file rejection;
 - restrictive settings and session permissions;
 - provider URL policy and TLS requirements;
-- Codex app-server handshake, streaming, approval routing, and thread persistence;
 - removal of credential-shaped environment variables from child processes; and
 - bounded JSON, request, response, and tool output handling.
 
@@ -215,16 +201,14 @@ Before calling a release complete on Haiku:
 5. Confirm that the icon, signature, and version resources are embedded.
 6. Inspect a saved session and log to confirm that no credential appears.
 7. Test one live API provider and record the provider and exact model ID.
-8. If a Haiku Codex build is available, test login status, a new Codex thread,
-   approval and denial, cancellation, and a resumed thread.
 
 ## Known limitations and future work
 
 - The native GUI, HVIF conversion, and resource embedding still require repeated
   testing on actual Haiku releases.
-- OpenAI does not currently publish a Haiku Codex binary. The upstream Rust
-  app-server must be ported or supplied separately.
-- In-app ChatGPT OAuth and dynamic Codex model discovery are not implemented yet.
+- In-app ChatGPT OAuth, direct Responses API inference, token refresh, and dynamic
+  model discovery are not implemented yet. No external Codex executable is needed
+  or supported.
 - Anthropic currently uses its compatibility endpoint rather than a native
   Messages API transport.
 - Tracker references, filesystem attributes and queries, notifications, Deskbar

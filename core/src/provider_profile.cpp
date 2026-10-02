@@ -11,7 +11,6 @@ const char* ProviderKindName(ProviderKind kind) {
         case ProviderKind::OpenAI: return "OpenAI API";
         case ProviderKind::AnthropicCompatibility: return "Anthropic API";
         case ProviderKind::OpenAICompatible: return "OpenAI-compatible";
-        case ProviderKind::CodexChatGPT: return "ChatGPT plan (Codex)";
     }
     return "OpenAI-compatible";
 }
@@ -21,7 +20,6 @@ std::string ProviderKindId(ProviderKind kind) {
         case ProviderKind::OpenAI: return "openai";
         case ProviderKind::AnthropicCompatibility: return "anthropic";
         case ProviderKind::OpenAICompatible: return "openai-compatible";
-        case ProviderKind::CodexChatGPT: return "codex-chatgpt";
     }
     return "openai-compatible";
 }
@@ -30,36 +28,22 @@ ProviderKind ParseProviderKind(const std::string& value) {
     if (value == "openai") return ProviderKind::OpenAI;
     if (value == "anthropic") return ProviderKind::AnthropicCompatibility;
     if (value == "openai-compatible") return ProviderKind::OpenAICompatible;
-    if (value == "codex-chatgpt") return ProviderKind::CodexChatGPT;
     throw std::runtime_error("unknown provider kind: " + value);
 }
 
 bool ProviderUsesApiKey(ProviderKind kind) {
-    return kind != ProviderKind::CodexChatGPT;
-}
-
-bool ProviderUsesCodexAppServer(ProviderKind kind) {
-    return kind == ProviderKind::CodexChatGPT;
+    (void)kind;
+    return true;
 }
 
 void ValidateProviderProfile(const ProviderProfile& profile) {
     if (profile.name.empty()) throw std::invalid_argument("provider name is required");
     if (profile.models.empty()) throw std::invalid_argument("provider has no configured models");
-    if (ProviderUsesCodexAppServer(profile.kind)) {
-        if (profile.base_url.empty())
-            throw std::invalid_argument("Codex executable path or command is required");
-        return;
-    }
     if (profile.base_url.empty()) throw std::invalid_argument("provider API URL is required");
 }
 
 std::vector<ProviderProfile> DefaultProviderProfiles() {
     return {
-        {
-            "codex", "Codex (ChatGPT plan)", ProviderKind::CodexChatGPT,
-            "codex", {}, {},
-            {"Use Codex default"}, "Use Codex default",
-        },
         {
             "openai", "OpenAI", ProviderKind::OpenAI,
             "https://api.openai.com/v1", "OPENAI_API_KEY", {},
@@ -84,8 +68,6 @@ std::vector<ProviderProfile> DefaultProviderProfiles() {
 std::shared_ptr<Provider> CreateProvider(const ProviderProfile& profile,
                                          long timeout_seconds) {
     ValidateProviderProfile(profile);
-    if (ProviderUsesCodexAppServer(profile.kind))
-        throw std::invalid_argument("Codex profiles run through codex app-server, not the API provider factory");
     return std::make_shared<OpenAIProvider>(OpenAIConfig{
         profile.base_url,
         profile.api_key_environment,

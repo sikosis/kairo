@@ -12,7 +12,6 @@ enum class ProviderKind {
     OpenAI,
     AnthropicCompatibility,
     OpenAICompatible,
-    CodexChatGPT,
 };
 
 struct ProviderProfile {
@@ -29,9 +28,8 @@ struct ProviderProfile {
 const char* ProviderKindName(ProviderKind kind);
 std::string ProviderKindId(ProviderKind kind);
 ProviderKind ParseProviderKind(const std::string& value);
-constexpr int ProviderKindCount() { return 4; }
+constexpr int ProviderKindCount() { return 3; }
 bool ProviderUsesApiKey(ProviderKind kind);
-bool ProviderUsesCodexAppServer(ProviderKind kind);
 void ValidateProviderProfile(const ProviderProfile& profile);
 std::vector<ProviderProfile> DefaultProviderProfiles();
 std::shared_ptr<Provider> CreateProvider(const ProviderProfile& profile,

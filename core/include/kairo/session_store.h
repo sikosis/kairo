@@ -14,7 +14,6 @@ struct Session {
     std::string project;
     std::string provider;
     std::string model;
-    std::string backend_thread_id;
     std::vector<Message> messages;
 };
 

@@ -14,3 +14,6 @@ sessions/
 
 # Internal planning document; not part of the public distribution
 Kairo_Haiku_Codex_Handoff.docx
+
+# Local Git helper
+update-git.sh

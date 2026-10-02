@@ -113,7 +113,6 @@ Kairo includes starting profiles for:
 - **OpenAI API**
 - **Anthropic API compatibility**
 - **OpenRouter or another OpenAI-compatible service**
-- **Codex using a ChatGPT plan**
 
 Provider model lists are editable because model access differs by account. Enter
 the exact model ID supplied by your provider.
@@ -129,25 +128,16 @@ Open **Provider Settings**, choose the provider, then enter:
 For example, an OpenRouter-compatible setup uses an API base URL such as
 `https://openrouter.ai/api/v1` and the exact OpenRouter model ID.
 
-### Using your ChatGPT plan with Codex
+### ChatGPT subscriptions
 
-The Codex profile does not use an OpenAI API key. It launches `codex app-server`
-and uses the account authorized by the Codex executable.
+Kairo does not require, launch, or wrap the Codex command-line program. There is
+no Codex executable for Haiku, and supplying one would defeat Kairo's purpose.
 
-First install or build a compatible `codex` executable and sign in from Terminal:
-
-```sh
-codex login
-```
-
-Then open Kairo's provider settings, select **Codex (ChatGPT plan)**, and set
-**Codex executable** to `codex` or its absolute path. Leave the model as
-**Use Codex default** initially.
-
-OpenAI does not currently publish a Haiku Codex binary, so this provider remains
-experimental on Haiku until a native x86_64 build is available. Kairo reports a
-clear error when it cannot find the executable. It never reads or copies Codex's
-credential files.
+ChatGPT Plus and Pro sign-in is not available in the current Kairo build. The
+planned implementation is an in-app **Continue with ChatGPT** flow using OpenAI's
+OAuth support for open-source applications, followed by direct calls to the
+Responses API. It will not require an API key or an external Codex installation.
+Until that work is complete, use one of the API-key provider profiles above.
 
 ## Safety and approvals
 
@@ -186,12 +176,6 @@ pkgman install ca_root_certificates
 ```
 
 Kairo automatically checks `/boot/system/data/ssl/CARootCertificates.pem`.
-
-### `Cannot find the Codex executable`
-
-Install or build Codex, run `codex login`, and enter its absolute path in the
-Codex provider profile. The OpenAI API profiles remain available if Codex cannot
-yet be built for your Haiku installation.
 
 ### The provider rejects a model
 
