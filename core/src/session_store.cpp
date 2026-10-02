@@ -104,7 +104,7 @@ fs::path SessionStore::SessionPath(const std::string& id) const {
 
 Session SessionStore::Create(const fs::path& project, const std::string& model,
                              const std::string& provider) const {
-    return {1, NewId(), fs::canonical(project).string(), provider, model, {}};
+    return {1, NewId(), fs::canonical(project).string(), provider, model, {}, {}};
 }
 
 void SessionStore::Save(const Session& session) const {
@@ -116,6 +116,7 @@ void SessionStore::Save(const Session& session) const {
         {"project", json::Value::String(session.project)},
         {"provider", json::Value::String(session.provider)},
         {"model", json::Value::String(session.model)},
+        {"backend_thread_id", json::Value::String(session.backend_thread_id)},
         {"messages", json::Value::Array(std::move(messages))},
     });
     fs::path path = SessionPath(session.id);
@@ -142,6 +143,7 @@ Session SessionStore::Load(const std::string& id) const {
     session.project = root.GetString("project");
     session.provider = root.GetString("provider");
     session.model = root.GetString("model");
+    session.backend_thread_id = root.GetString("backend_thread_id");
     const auto& messages = root.At("messages");
     if (messages.type != json::Value::Type::Array)
         throw std::runtime_error("invalid session messages");

@@ -3,6 +3,7 @@
 #endif
 
 #include "kairo/agent_engine.h"
+#include "kairo/codex_runner.h"
 #include "kairo/openai_provider.h"
 #include "kairo/provider_profile.h"
 
@@ -79,6 +80,7 @@ constexpr uint32 kSettingsAddProvider = 'sadd';
 constexpr uint32 kSettingsDeleteProvider = 'sdel';
 
 bool ProfileHasKey(const kairo::ProviderProfile& profile) {
+    if (!kairo::ProviderUsesApiKey(profile.kind)) return true;
     if (!profile.api_key.empty()) return true;
     const char* key = profile.api_key_environment.empty()
         ? nullptr : std::getenv(profile.api_key_environment.c_str());
@@ -86,6 +88,8 @@ bool ProfileHasKey(const kairo::ProviderProfile& profile) {
 }
 
 std::string ReadyStatus(const kairo::ProviderProfile& profile) {
+    if (kairo::ProviderUsesCodexAppServer(profile.kind))
+        return "Codex - requires a signed-in executable";
     return ProfileHasKey(profile)
         ? "Ready - " + profile.name + " key configured"
         : "Ready - " + profile.name + " key missing";
@@ -226,6 +230,13 @@ ProviderSettings LoadProviderSettings() {
                 loaded.profiles.push_back(std::move(profile));
         }
         if (!loaded.profiles.empty()) {
+            for (const auto& default_profile : kairo::DefaultProviderProfiles()) {
+                const bool present = std::any_of(loaded.profiles.begin(), loaded.profiles.end(),
+                    [&](const kairo::ProviderProfile& profile) {
+                        return profile.id == default_profile.id;
+                    });
+                if (!present) loaded.profiles.push_back(default_profile);
+            }
             if (loaded.selected_provider_id.empty())
                 loaded.selected_provider_id = loaded.profiles.front().id;
             return loaded;
@@ -339,7 +350,7 @@ public:
         provider_menu_ = new BPopUpMenu("settings-provider-options", true, true);
         provider_ = new BMenuField("settings-provider", "Provider", provider_menu_);
         kind_menu_ = new BPopUpMenu("settings-kind-options", true, true);
-        for (int32 index = 0; index < 3; ++index) {
+        for (int32 index = 0; index < kairo::ProviderKindCount(); ++index) {
             auto kind = static_cast<kairo::ProviderKind>(index);
             BMessage* selected = new BMessage(kSettingsKindChanged);
             selected->AddInt32("index", index);
@@ -347,18 +358,18 @@ public:
         }
         kind_ = new BMenuField("settings-kind", "Type", kind_menu_);
         name_ = new BTextControl("settings-name", "Name", "", nullptr);
-        endpoint_ = new BTextControl("settings-endpoint", "API URL", "", nullptr);
+        endpoint_ = new BTextControl("settings-endpoint", "API URL / executable", "", nullptr);
         key_environment_ = new BTextControl("settings-key-environment", "Key variable", "", nullptr);
         api_key_ = new BTextControl("settings-api-key", "API key", "", nullptr);
         api_key_->TextView()->HideTyping(true);
         models_ = new BTextView("settings-models");
-        auto* models_scroll = new BScrollView("settings-models-scroll", models_, 0, false, true);
+        models_scroll_ = new BScrollView("settings-models-scroll", models_, 0, false, true);
         provider_->SetExplicitMinSize(BSize(560, B_SIZE_UNSET));
         name_->SetExplicitMinSize(BSize(560, B_SIZE_UNSET));
         endpoint_->SetExplicitMinSize(BSize(560, B_SIZE_UNSET));
         key_environment_->SetExplicitMinSize(BSize(560, B_SIZE_UNSET));
         api_key_->SetExplicitMinSize(BSize(560, B_SIZE_UNSET));
-        models_scroll->SetExplicitMinSize(BSize(560, 130));
+        models_scroll_->SetExplicitMinSize(BSize(560, 130));
         auto* add = new BButton("settings-add", "Add Provider",
                                 new BMessage(kSettingsAddProvider));
         auto* remove = new BButton("settings-delete", "Delete Provider",
@@ -382,10 +393,8 @@ public:
             .Add(key_environment_)
             .Add(api_key_)
             .Add(new BStringView("models-label", "Models (one API model ID per line)"))
-            .Add(models_scroll, 1.0f)
-            .Add(new BStringView("credential-note",
-                "Keys are API credentials, stored locally with owner-only permissions. "
-                "Chat subscriptions are not API credentials."))
+            .Add(models_scroll_, 1.0f)
+            .Add(credential_note_ = new BStringView("credential-note", ""))
             .AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
                 .AddGlue()
                 .Add(cancel)
@@ -415,8 +424,11 @@ public:
         }
         if (message->what == kSettingsKindChanged) {
             int32 index = 0;
-            if (message->FindInt32("index", &index) == B_OK && index >= 0 && index < 3)
+            if (message->FindInt32("index", &index) == B_OK && index >= 0
+                && index < kairo::ProviderKindCount()) {
                 profiles_[current_].kind = static_cast<kairo::ProviderKind>(index);
+                UpdateKindControls();
+            }
             return;
         }
         if (message->what == kSettingsAddProvider) { AddProvider(); return; }
@@ -475,6 +487,17 @@ private:
         models_->SetText(model_lines.c_str());
         if (auto* item = provider_menu_->ItemAt(static_cast<int32>(current_))) item->SetMarked(true);
         if (auto* item = kind_menu_->ItemAt(static_cast<int32>(profile.kind))) item->SetMarked(true);
+        UpdateKindControls();
+    }
+
+    void UpdateKindControls() {
+        const bool codex = kairo::ProviderUsesCodexAppServer(profiles_[current_].kind);
+        endpoint_->SetLabel(codex ? "Codex executable" : "API URL");
+        key_environment_->SetEnabled(!codex);
+        api_key_->SetEnabled(!codex);
+        credential_note_->SetText(codex
+            ? "Uses your ChatGPT plan. Install Codex and run 'codex login' once before using it."
+            : "API keys are stored locally with owner-only permissions; prefer an environment variable.");
     }
 
     void RebuildProviderMenu() {
@@ -521,10 +544,9 @@ private:
         }
         for (const auto& profile : profiles_) {
             try {
-                if (profile.name.empty() || profile.base_url.empty() || profile.models.empty())
-                    throw std::runtime_error(
-                        "Each provider needs a name, an API URL, and at least one model ID.");
-                (void)kairo::CreateProvider(profile);
+                kairo::ValidateProviderProfile(profile);
+                if (!kairo::ProviderUsesCodexAppServer(profile.kind))
+                    (void)kairo::CreateProvider(profile);
             } catch (const std::exception& error) {
                 (new BAlert("provider-invalid", error.what(), "OK", nullptr, nullptr,
                             B_WIDTH_AS_USUAL, B_STOP_ALERT))->Go();
@@ -551,6 +573,8 @@ private:
     BTextControl* key_environment_;
     BTextControl* api_key_;
     BTextView* models_;
+    BScrollView* models_scroll_;
+    BStringView* credential_note_;
 };
 
 class KairoWindow : public BWindow {
@@ -903,7 +927,8 @@ private:
         std::string api_key = profile.api_key;
         const char* environment_key = profile.api_key_environment.empty()
             ? nullptr : std::getenv(profile.api_key_environment.c_str());
-        if (api_key.empty() && (!environment_key || !*environment_key)) {
+        if (kairo::ProviderUsesApiKey(profile.kind)
+            && api_key.empty() && (!environment_key || !*environment_key)) {
             WriteLog("WARNING", "Run blocked because no API key is configured");
             status_->SetText("Configure an API key in Settings");
             OpenSettings();
@@ -935,6 +960,7 @@ private:
                 if (!session.provider.empty() && session.provider != profile.id) {
                     WriteLog("INFO", std::string("Resumed session provider changed from ")
                         + session.provider + " to " + profile.id);
+                    session.backend_thread_id.clear();
                 }
                 session.provider = profile.id;
                 if (session.model != model) {
@@ -942,22 +968,6 @@ private:
                         + session.model + " to " + model);
                     session.model = model;
                 }
-                if (session.messages.empty()) session.messages.push_back({kairo::Role::System,
-                    "You are Kairo, a local coding assistant running natively on Haiku. Reads and searches "
-                    "stay inside the selected project. Use literal project-relative paths and '.' for the "
-                    "project root; do not inspect $HOME or other system locations. For native Haiku GUI apps, "
-                    "write C++ using BApplication and BWindow, compile with g++, and link with -lbe. Do not "
-                    "probe for bcc, bchk, bimg, getbeospath, or /boot/develop, and do not use -nostdlib unless "
-                    "the project explicitly requires it. Treat command-not-found and linker diagnostics as "
-                    "failures even if a compound shell command reports exit code 0. Writes and shell commands "
-                    "require approval.", {}, {}});
-                profile.api_key = api_key;
-                auto provider = kairo::CreateProvider(profile);
-                kairo::Limits limits;
-                kairo::AgentEngine engine(provider,
-                    kairo::Workspace(project, limits.max_tool_output_bytes,
-                                     {profile.api_key_environment}),
-                    store, limits);
                 auto approval = [this, target, require_approvals](const kairo::ProposedAction& action) {
                     if (!require_approvals) return true;
                     auto pending = std::make_shared<PendingApproval>();
@@ -978,6 +988,33 @@ private:
                     update.AddString("session", event.session_id.c_str());
                     target.SendMessage(&update);
                 };
+                if (kairo::ProviderUsesCodexAppServer(profile.kind)) {
+                    kairo::CodexRunner runner({profile.base_url});
+                    engine_started = true;
+                    runner.Run(session, project, prompt, require_approvals, approval, events,
+                               cancellation_, store);
+                    BMessage done(kEngineEvent);
+                    done.AddInt32("type", static_cast<int32>(kairo::EventType::Completed));
+                    done.AddBool("worker_done", true);
+                    target.SendMessage(&done);
+                    return;
+                }
+                if (session.messages.empty()) session.messages.push_back({kairo::Role::System,
+                    "You are Kairo, a local coding assistant running natively on Haiku. Reads and searches "
+                    "stay inside the selected project. Use literal project-relative paths and '.' for the "
+                    "project root; do not inspect $HOME or other system locations. For native Haiku GUI apps, "
+                    "write C++ using BApplication and BWindow, compile with g++, and link with -lbe. Do not "
+                    "probe for bcc, bchk, bimg, getbeospath, or /boot/develop, and do not use -nostdlib unless "
+                    "the project explicitly requires it. Treat command-not-found and linker diagnostics as "
+                    "failures even if a compound shell command reports exit code 0. Writes and shell commands "
+                    "require approval.", {}, {}});
+                profile.api_key = api_key;
+                auto provider = kairo::CreateProvider(profile);
+                kairo::Limits limits;
+                kairo::AgentEngine engine(provider,
+                    kairo::Workspace(project, limits.max_tool_output_bytes,
+                                     {profile.api_key_environment}),
+                    store, limits);
                 engine_started = true;
                 engine.Run(session, prompt, approval, events, cancellation_);
             } catch (const std::exception& error) {
