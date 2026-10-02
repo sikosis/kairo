@@ -58,13 +58,14 @@ CORE_SOURCES := \
 	core/src/workspace.cpp
 CORE_OBJECTS := $(CORE_SOURCES:%.cpp=build/%.o)
 
-GUI_PROVIDER_LIBS := $(PROVIDER_LIBS)
+PROVIDER_RPATH :=
+BUNDLED_CURL_OUTPUTS :=
 ifeq ($(UNAME_S),Haiku)
 ifeq ($(KAIRO_USE_CURL),1)
 BUNDLED_CURL_DIR := vendor/haiku-x86_64/lib
 BUNDLED_CURL_OUTPUTS := build/libcurl.so build/libcurl.so.4 build/libcurl.so.4.8.0
-GUI_PROVIDER_LIBS := -L$(BUNDLED_CURL_DIR) -lcurl $(if $(CRYPTO_AVAILABLE),$(CRYPTO_LINK_LIBS))
-GUI_RPATH := -Wl,-rpath,'$$ORIGIN'
+PROVIDER_LIBS := -L$(BUNDLED_CURL_DIR) -lcurl $(if $(CRYPTO_AVAILABLE),$(CRYPTO_LINK_LIBS)) -lnetwork
+PROVIDER_RPATH := -Wl,-rpath,'$$ORIGIN'
 endif
 endif
 
@@ -75,14 +76,14 @@ build/libkairo.a: $(CORE_OBJECTS)
 	@mkdir -p $(@D)
 	$(AR) rcs $@ $^
 
-build/kairo-cli: build/apps/cli/main.o build/libkairo.a
-	$(CXX) $(LDFLAGS) -o $@ $^ $(PROVIDER_LIBS)
+build/kairo-cli: build/apps/cli/main.o build/libkairo.a $(BUNDLED_CURL_OUTPUTS)
+	$(CXX) $(LDFLAGS) $(PROVIDER_RPATH) -o $@ build/apps/cli/main.o build/libkairo.a $(PROVIDER_LIBS)
 
-build/kairo-tests: build/tests/test_main.o build/libkairo.a
-	$(CXX) $(LDFLAGS) -o $@ $^ $(PROVIDER_LIBS)
+build/kairo-tests: build/tests/test_main.o build/libkairo.a $(BUNDLED_CURL_OUTPUTS)
+	$(CXX) $(LDFLAGS) $(PROVIDER_RPATH) -o $@ build/tests/test_main.o build/libkairo.a $(PROVIDER_LIBS)
 
 build/kairo-gui: build/apps/gui/main.o build/libkairo.a $(BUNDLED_CURL_OUTPUTS)
-	$(CXX) $(LDFLAGS) $(GUI_RPATH) -o $@ build/apps/gui/main.o build/libkairo.a $(GUI_PROVIDER_LIBS) -lbe -ltracker
+	$(CXX) $(LDFLAGS) $(PROVIDER_RPATH) -o $@ build/apps/gui/main.o build/libkairo.a $(PROVIDER_LIBS) -lbe -ltracker
 	./scripts/embed-haiku-resources.sh $@
 
 build/libcurl.so.4.8.0: vendor/haiku-x86_64/lib/libcurl.so.4.8.0

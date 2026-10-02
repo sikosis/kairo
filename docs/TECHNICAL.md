@@ -124,7 +124,9 @@ dependencies are supplied by Haiku.
 
 The build links the GUI with `-lbe -ltracker`. It uses `hvif_tools`, when present,
 to convert and embed the application icon and always attempts to embed the
-application signature and version metadata.
+application signature and version metadata. All Haiku executables link with
+`libnetwork` for the OAuth loopback listener and use the bundled libcurl search
+path and `$ORIGIN` runtime path consistently.
 
 ## CLI reference
 
