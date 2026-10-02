@@ -29,8 +29,9 @@ git pull
 ## Install the build requirements
 
 Kairo needs Git, a C++17 compiler, `make`, and the standard Haiku development
-files. The x86_64 repository checkout already contains the libcurl headers and
-main shared library used by the build.
+files. OpenSSL development headers are used to validate ChatGPT identity tokens.
+The x86_64 repository checkout already contains the libcurl headers and main
+shared library used by the build.
 
 If Git or the curl runtime dependencies are missing, inspect the package names
 available on your Haiku release:
@@ -47,6 +48,7 @@ A typical setup is:
 pkgman install git
 pkgman install curl
 pkgman install ca_root_certificates
+pkgman install openssl3_devel
 pkgman install hvif_tools
 ```
 
@@ -113,6 +115,7 @@ Kairo includes starting profiles for:
 - **OpenAI API**
 - **Anthropic API compatibility**
 - **OpenRouter or another OpenAI-compatible service**
+- **ChatGPT Plus / Pro** through **Continue with ChatGPT**
 
 Provider model lists are editable because model access differs by account. Enter
 the exact model ID supplied by your provider.
@@ -133,11 +136,21 @@ For example, an OpenRouter-compatible setup uses an API base URL such as
 Kairo does not require, launch, or wrap the Codex command-line program. There is
 no Codex executable for Haiku, and supplying one would defeat Kairo's purpose.
 
-ChatGPT Plus and Pro sign-in is not available in the current Kairo build. The
-planned implementation is an in-app **Continue with ChatGPT** flow using OpenAI's
-OAuth support for open-source applications, followed by direct calls to the
-Responses API. It will not require an API key or an external Codex installation.
-Until that work is complete, use one of the API-key provider profiles above.
+Open **Provider Settings**, select **ChatGPT Plus / Pro**, and press **Continue
+with ChatGPT**. Kairo opens the system browser, receives the authorization on a
+temporary `127.0.0.1` callback, and loads the models available to that account.
+Kairo saves the discovered model list after sign-in; choose one in the main window.
+
+This flow uses OpenAI's OAuth support for open-source applications and calls the
+Responses API directly. It does not require an API key or an external Codex
+installation. Kairo stores the rotating tokens in the owner-only file
+`~/config/settings/Kairo/chatgpt_credentials.json`; **Sign Out** revokes the
+renewable session and clears the local tokens while retaining the verified account,
+host, and client registration mapping needed for a later sign-in.
+
+OpenAI currently describes ChatGPT-plan access as a preview. Model and plan usage
+availability therefore depends on the selected account, workspace, region, and
+OpenAI policy; Kairo reports those service errors without falling back to API billing.
 
 ## Safety and approvals
 

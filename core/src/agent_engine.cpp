@@ -35,6 +35,7 @@ std::string AgentEngine::Run(Session& session, const std::string& prompt,
                 add_size(message.tool_call_id.size());
                 for (const auto& call : message.tool_calls)
                     { add_size(call.id.size()); add_size(call.name.size()); add_size(call.arguments.size()); }
+                for (const auto& item : message.provider_items) add_size(item.size());
             }
 
             EventSink provider_events = [&](const EngineEvent& incoming) {
@@ -44,7 +45,8 @@ std::string AgentEngine::Run(Session& session, const std::string& prompt,
             };
             ProviderResponse response = provider_->Complete({session.model, session.messages}, provider_events, cancellation);
             if (cancellation.IsCancelled()) { emit(EventType::Cancelled); return {}; }
-            session.messages.push_back({Role::Assistant, response.text, {}, response.tool_calls});
+            session.messages.push_back({Role::Assistant, response.text, {}, response.tool_calls,
+                                        response.provider_items});
             if (response.tool_calls.empty()) {
                 sessions_.Save(session);
                 emit(EventType::SessionSaved, sessions_.Directory().string());

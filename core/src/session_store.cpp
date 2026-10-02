@@ -58,10 +58,14 @@ json::Value ToolCallToJson(const ToolCall& call) {
 json::Value MessageToJson(const Message& message) {
     std::vector<json::Value> calls;
     for (const auto& call : message.tool_calls) calls.push_back(ToolCallToJson(call));
+    std::vector<json::Value> provider_items;
+    for (const auto& item : message.provider_items)
+        provider_items.push_back(json::Value::String(item));
     return json::Value::Object({{"role", json::Value::String(RoleName(message.role))},
                                 {"content", json::Value::String(message.content)},
                                 {"tool_call_id", json::Value::String(message.tool_call_id)},
-                                {"tool_calls", json::Value::Array(std::move(calls))}});
+                                {"tool_calls", json::Value::Array(std::move(calls))},
+                                {"provider_items", json::Value::Array(std::move(provider_items))}});
 }
 
 ToolCall ToolCallFromJson(const json::Value& value) {
@@ -75,6 +79,9 @@ Message MessageFromJson(const json::Value& value) {
     message.tool_call_id = value.GetString("tool_call_id");
     if (const auto* calls = value.Find("tool_calls"); calls && calls->type == json::Value::Type::Array)
         for (const auto& call : calls->array) message.tool_calls.push_back(ToolCallFromJson(call));
+    if (const auto* items = value.Find("provider_items"); items && items->type == json::Value::Type::Array)
+        for (const auto& item : items->array)
+            if (item.type == json::Value::Type::String) message.provider_items.push_back(item.string);
     return message;
 }
 

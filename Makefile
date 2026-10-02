@@ -15,15 +15,24 @@ LDFLAGS += -pthread
 
 CURL_CFLAGS := $(shell $(PKG_CONFIG) --cflags libcurl 2>/dev/null || $(CURL_CONFIG) --cflags 2>/dev/null)
 CURL_LIBS := $(shell $(PKG_CONFIG) --libs libcurl 2>/dev/null || $(CURL_CONFIG) --libs 2>/dev/null)
+CRYPTO_CFLAGS := $(shell $(PKG_CONFIG) --cflags libcrypto 2>/dev/null || $(PKG_CONFIG) --cflags openssl 2>/dev/null)
+CRYPTO_LIBS := $(shell $(PKG_CONFIG) --libs libcrypto 2>/dev/null || $(PKG_CONFIG) --libs openssl 2>/dev/null)
+CRYPTO_LINK_LIBS := $(if $(strip $(CRYPTO_LIBS)),$(CRYPTO_LIBS),-lcrypto)
+CRYPTO_AVAILABLE := $(shell probe=/tmp/kairo-crypto-probe.$$$$; \
+	printf '%s\n' '\#include <openssl/evp.h>' 'int main(){EVP_MD_CTX* c=EVP_MD_CTX_new(); EVP_MD_CTX_free(c);}' | \
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(CRYPTO_CFLAGS) -x c++ - $(CRYPTO_LINK_LIBS) -o $$probe >/dev/null 2>&1 && printf 1; \
+	rm -f $$probe)
 ifeq ($(KAIRO_USE_CURL),1)
-CPPFLAGS += -DKAIRO_HAS_CURL=1 $(CURL_CFLAGS)
-PROVIDER_LIBS := $(if $(strip $(CURL_LIBS)),$(CURL_LIBS),-lcurl)
+CPPFLAGS += -DKAIRO_HAS_CURL=1 -DKAIRO_HAS_CRYPTO=$(if $(CRYPTO_AVAILABLE),1,0) $(CURL_CFLAGS) $(if $(CRYPTO_AVAILABLE),$(CRYPTO_CFLAGS))
+PROVIDER_LIBS := $(if $(strip $(CURL_LIBS)),$(CURL_LIBS),-lcurl) $(if $(CRYPTO_AVAILABLE),$(CRYPTO_LINK_LIBS))
 else
-CPPFLAGS += -DKAIRO_HAS_CURL=0
+CPPFLAGS += -DKAIRO_HAS_CURL=0 -DKAIRO_HAS_CRYPTO=0
 endif
 
 CORE_SOURCES := \
 	core/src/agent_engine.cpp \
+	core/src/chatgpt_auth.cpp \
+	core/src/chatgpt_provider.cpp \
 	core/src/events.cpp \
 	core/src/json.cpp \
 	core/src/model.cpp \
@@ -39,7 +48,7 @@ ifeq ($(UNAME_S),Haiku)
 ifeq ($(KAIRO_USE_CURL),1)
 BUNDLED_CURL_DIR := vendor/haiku-x86_64/lib
 BUNDLED_CURL_OUTPUTS := build/libcurl.so build/libcurl.so.4 build/libcurl.so.4.8.0
-GUI_PROVIDER_LIBS := -L$(BUNDLED_CURL_DIR) -lcurl
+GUI_PROVIDER_LIBS := -L$(BUNDLED_CURL_DIR) -lcurl $(if $(CRYPTO_AVAILABLE),$(CRYPTO_LINK_LIBS))
 GUI_RPATH := -Wl,-rpath,'$$ORIGIN'
 endif
 endif

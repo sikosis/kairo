@@ -12,6 +12,7 @@ enum class ProviderKind {
     OpenAI,
     AnthropicCompatibility,
     OpenAICompatible,
+    ChatGPTPlan,
 };
 
 struct ProviderProfile {
@@ -28,11 +29,13 @@ struct ProviderProfile {
 const char* ProviderKindName(ProviderKind kind);
 std::string ProviderKindId(ProviderKind kind);
 ProviderKind ParseProviderKind(const std::string& value);
-constexpr int ProviderKindCount() { return 3; }
+constexpr int ProviderKindCount() { return 4; }
 bool ProviderUsesApiKey(ProviderKind kind);
+bool ProviderUsesChatGPTPlan(ProviderKind kind);
 void ValidateProviderProfile(const ProviderProfile& profile);
 std::vector<ProviderProfile> DefaultProviderProfiles();
 std::shared_ptr<Provider> CreateProvider(const ProviderProfile& profile,
-                                         long timeout_seconds = 120);
+                                         long timeout_seconds = 120,
+                                         const std::string& chatgpt_credential_file = {});
 
 }  // namespace kairo

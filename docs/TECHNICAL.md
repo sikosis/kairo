@@ -33,19 +33,22 @@ assembles fragmented tool-call arguments by tool index. Anthropic profiles
 currently use Anthropic's OpenAI SDK compatibility endpoint and include the
 required token limit.
 
-### Planned ChatGPT subscription backend
+### ChatGPT subscription backend
 
 Kairo must not depend on the Codex command-line program: it is not available on
 Haiku, and Kairo exists to provide a native Haiku client. The previously explored
 `codex app-server` adapter was removed for that reason.
 
-The intended ChatGPT Plus and Pro integration is an in-app **Continue with
-ChatGPT** flow. Kairo will dynamically register as an open-source client, open the
-authorization page, receive the loopback callback, validate the returned identity,
-and securely retain rotating OAuth credentials. It will then discover eligible
-models and call the Responses API directly. This provider must not be exposed as
-working until the complete authorization, token refresh, sign-out, and direct
-inference path is implemented and tested on Haiku. References:
+The ChatGPT Plus and Pro integration uses an in-app **Continue with ChatGPT**
+flow. Kairo dynamically registers as an open-source client, opens the authorization
+page, receives the loopback callback, validates OAuth state and the signed ID token,
+and retains rotating credentials in an atomic owner-only file. It discovers the
+account's eligible models and calls the Responses API directly with `store:false`,
+streaming enabled, full local context, and encrypted reasoning items preserved
+across local tool calls. Kairo's local functions are grouped in a Responses tool
+namespace as required by the ChatGPT-plan preview route. Access tokens are refreshed before expiry. Sign-out
+attempts remote refresh-token revocation and always clears the local tokens.
+References:
 
 - [Sign in with ChatGPT quickstart](https://developers.openai.com/siwc/quickstart)
 - [Open-source registration and sign-in](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
@@ -77,9 +80,15 @@ Sessions include:
 - schema version and Kairo session ID;
 - canonical project path;
 - provider-profile ID and selected model;
-- messages and tool results; and
+- messages, tool results, and provider-specific continuation items.
 
 Credentials are not stored in session files.
+
+ChatGPT OAuth credentials are separate from provider profiles and sessions. The
+credential record stores the stable host ID, issued dynamic-client ID, verified
+account identity, retained ID token, access token, rotating refresh token, scopes,
+and expiry under `~/config/settings/Kairo/chatgpt_credentials.json` with mode
+`0600`. Provider settings and diagnostics never contain these tokens.
 
 ## Build details
 
@@ -172,6 +181,7 @@ The portable suite covers:
 - binary-file rejection;
 - restrictive settings and session permissions;
 - provider URL policy and TLS requirements;
+- ChatGPT provider selection and API-key separation;
 - removal of credential-shaped environment variables from child processes; and
 - bounded JSON, request, response, and tool output handling.
 
@@ -206,9 +216,9 @@ Before calling a release complete on Haiku:
 
 - The native GUI, HVIF conversion, and resource embedding still require repeated
   testing on actual Haiku releases.
-- In-app ChatGPT OAuth, direct Responses API inference, token refresh, and dynamic
-  model discovery are not implemented yet. No external Codex executable is needed
-  or supported.
+- The ChatGPT OAuth and Responses path still needs final end-to-end verification
+  on a native Haiku installation with an eligible account. No external Codex
+  executable is needed or supported.
 - Anthropic currently uses its compatibility endpoint rather than a native
   Messages API transport.
 - Tracker references, filesystem attributes and queries, notifications, Deskbar

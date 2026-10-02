@@ -1,5 +1,6 @@
 #include "kairo/provider_profile.h"
 
+#include "kairo/chatgpt_provider.h"
 #include "kairo/openai_provider.h"
 
 #include <stdexcept>
@@ -11,6 +12,7 @@ const char* ProviderKindName(ProviderKind kind) {
         case ProviderKind::OpenAI: return "OpenAI API";
         case ProviderKind::AnthropicCompatibility: return "Anthropic API";
         case ProviderKind::OpenAICompatible: return "OpenAI-compatible";
+        case ProviderKind::ChatGPTPlan: return "ChatGPT Plus / Pro";
     }
     return "OpenAI-compatible";
 }
@@ -20,6 +22,7 @@ std::string ProviderKindId(ProviderKind kind) {
         case ProviderKind::OpenAI: return "openai";
         case ProviderKind::AnthropicCompatibility: return "anthropic";
         case ProviderKind::OpenAICompatible: return "openai-compatible";
+        case ProviderKind::ChatGPTPlan: return "chatgpt-plan";
     }
     return "openai-compatible";
 }
@@ -28,22 +31,30 @@ ProviderKind ParseProviderKind(const std::string& value) {
     if (value == "openai") return ProviderKind::OpenAI;
     if (value == "anthropic") return ProviderKind::AnthropicCompatibility;
     if (value == "openai-compatible") return ProviderKind::OpenAICompatible;
+    if (value == "chatgpt-plan") return ProviderKind::ChatGPTPlan;
     throw std::runtime_error("unknown provider kind: " + value);
 }
 
 bool ProviderUsesApiKey(ProviderKind kind) {
-    (void)kind;
-    return true;
+    return kind != ProviderKind::ChatGPTPlan;
 }
+
+bool ProviderUsesChatGPTPlan(ProviderKind kind) { return kind == ProviderKind::ChatGPTPlan; }
 
 void ValidateProviderProfile(const ProviderProfile& profile) {
     if (profile.name.empty()) throw std::invalid_argument("provider name is required");
     if (profile.models.empty()) throw std::invalid_argument("provider has no configured models");
     if (profile.base_url.empty()) throw std::invalid_argument("provider API URL is required");
+    if (ProviderUsesChatGPTPlan(profile.kind) && profile.base_url != "https://api.openai.com/v1")
+        throw std::invalid_argument("ChatGPT plan access must use https://api.openai.com/v1");
 }
 
 std::vector<ProviderProfile> DefaultProviderProfiles() {
     return {
+        {
+            "chatgpt", "ChatGPT Plus / Pro", ProviderKind::ChatGPTPlan,
+            "https://api.openai.com/v1", {}, {}, {"Sign in to load models"}, "Sign in to load models",
+        },
         {
             "openai", "OpenAI", ProviderKind::OpenAI,
             "https://api.openai.com/v1", "OPENAI_API_KEY", {},
@@ -66,8 +77,11 @@ std::vector<ProviderProfile> DefaultProviderProfiles() {
 }
 
 std::shared_ptr<Provider> CreateProvider(const ProviderProfile& profile,
-                                         long timeout_seconds) {
+                                         long timeout_seconds,
+                                         const std::string& chatgpt_credential_file) {
     ValidateProviderProfile(profile);
+    if (ProviderUsesChatGPTPlan(profile.kind))
+        return std::make_shared<ChatGPTProvider>(ChatGPTConfig{chatgpt_credential_file, timeout_seconds});
     return std::make_shared<OpenAIProvider>(OpenAIConfig{
         profile.base_url,
         profile.api_key_environment,

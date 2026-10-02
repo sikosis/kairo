@@ -3,6 +3,7 @@
 #endif
 
 #include "kairo/agent_engine.h"
+#include "kairo/chatgpt_auth.h"
 #include "kairo/openai_provider.h"
 #include "kairo/provider_profile.h"
 
@@ -26,6 +27,7 @@
 #include <Messenger.h>
 #include <Path.h>
 #include <PopUpMenu.h>
+#include <Roster.h>
 #include <ScrollView.h>
 #include <Size.h>
 #include <StringView.h>
@@ -77,6 +79,12 @@ constexpr uint32 kSettingsProviderChanged = 'spch';
 constexpr uint32 kSettingsKindChanged = 'skch';
 constexpr uint32 kSettingsAddProvider = 'sadd';
 constexpr uint32 kSettingsDeleteProvider = 'sdel';
+constexpr uint32 kChatGPTSignIn = 'cgsi';
+constexpr uint32 kChatGPTSignOut = 'cgso';
+constexpr uint32 kChatGPTAuthResult = 'cgar';
+constexpr uint32 kOpenAuthUrl = 'cgau';
+
+fs::path ChatGPTCredentialPath();
 
 bool ProfileHasKey(const kairo::ProviderProfile& profile) {
     if (!kairo::ProviderUsesApiKey(profile.kind)) return true;
@@ -87,6 +95,13 @@ bool ProfileHasKey(const kairo::ProviderProfile& profile) {
 }
 
 std::string ReadyStatus(const kairo::ProviderProfile& profile) {
+    if (kairo::ProviderUsesChatGPTPlan(profile.kind)) {
+        try {
+            kairo::ChatGPTAuth auth(ChatGPTCredentialPath());
+            return auth.IsSignedIn() ? "Ready - ChatGPT account connected"
+                                     : "ChatGPT sign-in required";
+        } catch (...) { return "ChatGPT sign-in required"; }
+    }
     return ProfileHasKey(profile)
         ? "Ready - " + profile.name + " key configured"
         : "Ready - " + profile.name + " key missing";
@@ -118,6 +133,10 @@ fs::path SessionDirectory() {
     if (find_directory(B_USER_SETTINGS_DIRECTORY, &path) != B_OK)
         return fs::temp_directory_path() / "Kairo" / "sessions";
     return fs::path(path.Path()) / "Kairo" / "sessions";
+}
+
+fs::path ChatGPTCredentialPath() {
+    return SessionDirectory().parent_path() / "chatgpt_credentials.json";
 }
 
 fs::path LogPath() {
@@ -361,6 +380,11 @@ public:
         api_key_->TextView()->HideTyping(true);
         models_ = new BTextView("settings-models");
         models_scroll_ = new BScrollView("settings-models-scroll", models_, 0, false, true);
+        chatgpt_sign_in_ = new BButton("chatgpt-sign-in", "Continue with ChatGPT",
+                                       new BMessage(kChatGPTSignIn));
+        chatgpt_sign_out_ = new BButton("chatgpt-sign-out", "Sign Out",
+                                        new BMessage(kChatGPTSignOut));
+        chatgpt_status_ = new BStringView("chatgpt-status", "");
         provider_->SetExplicitMinSize(BSize(560, B_SIZE_UNSET));
         name_->SetExplicitMinSize(BSize(560, B_SIZE_UNSET));
         endpoint_->SetExplicitMinSize(BSize(560, B_SIZE_UNSET));
@@ -389,6 +413,11 @@ public:
             .Add(endpoint_)
             .Add(key_environment_)
             .Add(api_key_)
+            .AddGroup(B_HORIZONTAL, B_USE_DEFAULT_SPACING)
+                .Add(chatgpt_sign_in_)
+                .Add(chatgpt_sign_out_)
+                .Add(chatgpt_status_, 1.0f)
+            .End()
             .Add(new BStringView("models-label", "Models (one API model ID per line)"))
             .Add(models_scroll_, 1.0f)
             .Add(credential_note_ = new BStringView("credential-note", ""))
@@ -402,6 +431,13 @@ public:
         for (std::size_t index = 0; index < profiles_.size(); ++index)
             if (profiles_[index].id == selected_provider_id_) current_ = index;
         LoadCurrent();
+    }
+
+    ~ProviderSettingsWindow() override { auth_cancellation_.Cancel(); }
+
+    bool QuitRequested() override {
+        auth_cancellation_.Cancel();
+        return true;
     }
 
     void MessageReceived(BMessage* message) override {
@@ -424,12 +460,24 @@ public:
             if (message->FindInt32("index", &index) == B_OK && index >= 0
                 && index < kairo::ProviderKindCount()) {
                 profiles_[current_].kind = static_cast<kairo::ProviderKind>(index);
+                if (kairo::ProviderUsesChatGPTPlan(profiles_[current_].kind)) {
+                    profiles_[current_].base_url = "https://api.openai.com/v1";
+                    profiles_[current_].api_key.clear();
+                    profiles_[current_].api_key_environment.clear();
+                    endpoint_->SetText(profiles_[current_].base_url.c_str());
+                    key_environment_->SetText("");
+                    api_key_->SetText("");
+                }
                 UpdateKindControls();
             }
             return;
         }
         if (message->what == kSettingsAddProvider) { AddProvider(); return; }
         if (message->what == kSettingsDeleteProvider) { DeleteProvider(); return; }
+        if (message->what == kChatGPTSignIn) { StartChatGPTSignIn(); return; }
+        if (message->what == kChatGPTSignOut) { StartChatGPTSignOut(); return; }
+        if (message->what == kOpenAuthUrl) { OpenAuthUrl(message); return; }
+        if (message->what == kChatGPTAuthResult) { FinishChatGPTAuth(message); return; }
         if (message->what == kSaveSettings) { SaveAll(); return; }
         BWindow::MessageReceived(message);
     }
@@ -488,11 +536,140 @@ private:
     }
 
     void UpdateKindControls() {
+        const bool chatgpt = kairo::ProviderUsesChatGPTPlan(profiles_[current_].kind);
         endpoint_->SetLabel("API URL");
-        key_environment_->SetEnabled(true);
-        api_key_->SetEnabled(true);
-        credential_note_->SetText(
-            "API keys are stored locally with owner-only permissions; prefer an environment variable.");
+        endpoint_->SetEnabled(!chatgpt);
+        key_environment_->SetEnabled(!chatgpt);
+        api_key_->SetEnabled(!chatgpt);
+        models_->MakeEditable(!chatgpt);
+        bool signed_in = false;
+        bool account_known = false;
+        if (chatgpt) {
+            try {
+                kairo::ChatGPTAuth auth(ChatGPTCredentialPath());
+                auto account = auth.Account();
+                account_known = !account.client_id.empty() && !account.subject.empty() &&
+                                !account.id_token.empty();
+                signed_in = auth.IsSignedIn();
+                if (!auth_busy_) chatgpt_status_->SetText(signed_in
+                    ? ("Connected as " + (account.email.empty() ? std::string("ChatGPT account") : account.email)).c_str()
+                    : (account_known ? "Connected; plan access is not enabled" : "Not connected"));
+            } catch (...) { chatgpt_status_->SetText("Not connected"); }
+            credential_note_->SetText(
+                "Uses your ChatGPT plan through Kairo's secure OAuth connection; no Codex executable or API key.");
+        } else {
+            chatgpt_status_->SetText("");
+            credential_note_->SetText(
+                "API keys are stored locally with owner-only permissions; prefer an environment variable.");
+        }
+        chatgpt_sign_in_->SetLabel(account_known ? "Reconnect ChatGPT" : "Continue with ChatGPT");
+        chatgpt_sign_in_->SetEnabled(chatgpt && !auth_busy_);
+        chatgpt_sign_out_->SetEnabled(chatgpt && account_known && !auth_busy_);
+    }
+
+    void StartChatGPTSignIn() {
+        if (auth_busy_ || !kairo::ProviderUsesChatGPTPlan(profiles_[current_].kind)) return;
+        auth_busy_ = true;
+        auth_cancellation_ = kairo::CancellationToken{};
+        UpdateKindControls();
+        chatgpt_status_->SetText("Waiting for browser authorization...");
+        BMessenger self(this);
+        const fs::path credentials = ChatGPTCredentialPath();
+        const std::string profile_id = profiles_[current_].id;
+        const kairo::CancellationToken cancellation = auth_cancellation_;
+        std::thread([self, credentials, profile_id, cancellation] {
+            BMessage result(kChatGPTAuthResult);
+            result.AddString("profile_id", profile_id.c_str());
+            try {
+                kairo::ChatGPTAuth auth(credentials);
+                auto account = auth.SignIn([self](const std::string& url) {
+                    BMessage open(kOpenAuthUrl);
+                    open.AddString("url", url.c_str());
+                    self.SendMessage(&open);
+                }, cancellation);
+                auto models = auth.ListModels();
+                result.AddBool("ok", true);
+                result.AddString("email", account.email.c_str());
+                for (const auto& model : models) result.AddString("model", model.slug.c_str());
+            } catch (const std::exception& error) {
+                result.AddBool("ok", false);
+                result.AddString("error", error.what());
+            }
+            self.SendMessage(&result);
+        }).detach();
+    }
+
+    void StartChatGPTSignOut() {
+        if (auth_busy_ || !kairo::ProviderUsesChatGPTPlan(profiles_[current_].kind)) return;
+        auth_busy_ = true;
+        UpdateKindControls();
+        chatgpt_status_->SetText("Signing out...");
+        BMessenger self(this);
+        const fs::path credentials = ChatGPTCredentialPath();
+        const std::string profile_id = profiles_[current_].id;
+        std::thread([self, credentials, profile_id] {
+            BMessage result(kChatGPTAuthResult);
+            result.AddString("profile_id", profile_id.c_str());
+            result.AddBool("signed_out", true);
+            try { kairo::ChatGPTAuth(credentials).SignOut(); result.AddBool("ok", true); }
+            catch (const std::exception& error) {
+                result.AddBool("ok", false); result.AddString("error", error.what());
+            }
+            self.SendMessage(&result);
+        }).detach();
+    }
+
+    void OpenAuthUrl(BMessage* message) {
+        const char* url = nullptr;
+        if (message->FindString("url", &url) != B_OK || !url) return;
+        const char* arguments[] = {url};
+        status_t opened = be_roster->Launch("text/html", 1, arguments);
+        if (opened != B_OK) {
+            std::string text = "Kairo could not open the browser. Copy this URL into your browser:\n\n";
+            text += url;
+            (new BAlert("chatgpt-url", text.c_str(), "OK", nullptr, nullptr,
+                        B_WIDTH_AS_USUAL, B_WARNING_ALERT))->Go();
+        }
+    }
+
+    void FinishChatGPTAuth(BMessage* message) {
+        auth_busy_ = false;
+        bool ok = false, signed_out = false;
+        message->FindBool("ok", &ok);
+        message->FindBool("signed_out", &signed_out);
+        if (ok && !signed_out) {
+            const char* profile_id = nullptr;
+            message->FindString("profile_id", &profile_id);
+            auto profile = std::find_if(profiles_.begin(), profiles_.end(),
+                [profile_id](const kairo::ProviderProfile& candidate) {
+                    return profile_id && candidate.id == profile_id;
+                });
+            if (profile == profiles_.end()) return;
+            std::vector<std::string> models;
+            const char* value = nullptr;
+            for (int32 index = 0; message->FindString("model", index, &value) == B_OK; ++index)
+                if (value && *value) models.emplace_back(value);
+            if (!models.empty()) {
+                profile->models = std::move(models);
+                profile->selected_model = profile->models.front();
+                if (&*profile == &profiles_[current_]) {
+                    std::string lines;
+                    for (const auto& model : profile->models) lines += model + "\n";
+                    models_->SetText(lines.c_str());
+                }
+            }
+            chatgpt_status_->SetText("Connected; saving model list...");
+            SaveAll();
+            return;
+        } else if (ok) chatgpt_status_->SetText("Signed out");
+        else {
+            const char* error = "ChatGPT authorization failed";
+            message->FindString("error", &error);
+            chatgpt_status_->SetText("Authorization failed");
+            (new BAlert("chatgpt-error", error, "OK", nullptr, nullptr,
+                        B_WIDTH_AS_USUAL, B_STOP_ALERT))->Go();
+        }
+        UpdateKindControls();
     }
 
     void RebuildProviderMenu() {
@@ -540,7 +717,7 @@ private:
         for (const auto& profile : profiles_) {
             try {
                 kairo::ValidateProviderProfile(profile);
-                (void)kairo::CreateProvider(profile);
+                (void)kairo::CreateProvider(profile, 120, ChatGPTCredentialPath().string());
             } catch (const std::exception& error) {
                 (new BAlert("provider-invalid", error.what(), "OK", nullptr, nullptr,
                             B_WIDTH_AS_USUAL, B_STOP_ALERT))->Go();
@@ -567,6 +744,11 @@ private:
     BTextControl* key_environment_;
     BTextControl* api_key_;
     BTextView* models_;
+    BButton* chatgpt_sign_in_;
+    BButton* chatgpt_sign_out_;
+    BStringView* chatgpt_status_;
+    bool auth_busy_ = false;
+    kairo::CancellationToken auth_cancellation_;
     BScrollView* models_scroll_;
     BStringView* credential_note_;
 };
@@ -852,7 +1034,8 @@ private:
         try {
             ProviderSettings updated = SettingsFromMessage(*message);
             if (updated.profiles.empty()) throw std::runtime_error("No providers were supplied");
-            for (const auto& profile : updated.profiles) (void)kairo::CreateProvider(profile);
+            for (const auto& profile : updated.profiles)
+                (void)kairo::CreateProvider(profile, 120, ChatGPTCredentialPath().string());
             if (SaveProviderSettings(updated) != B_OK)
                 throw std::runtime_error("Kairo could not save the provider settings");
             provider_settings_ = std::move(updated);
@@ -928,6 +1111,19 @@ private:
             OpenSettings();
             return;
         }
+        if (kairo::ProviderUsesChatGPTPlan(profile.kind)) {
+            try {
+                if (!kairo::ChatGPTAuth(ChatGPTCredentialPath()).IsSignedIn()) {
+                    status_->SetText("Continue with ChatGPT in Settings first");
+                    OpenSettings();
+                    return;
+                }
+            } catch (const std::exception&) {
+                status_->SetText("Continue with ChatGPT in Settings first");
+                OpenSettings();
+                return;
+            }
+        }
         prompt_->SetText("");
         AppendTranscript("\nYou: ", TranscriptStyle::User, true);
         AppendTranscript(prompt, TranscriptStyle::User);
@@ -954,12 +1150,14 @@ private:
                 if (!session.provider.empty() && session.provider != profile.id) {
                     WriteLog("INFO", std::string("Resumed session provider changed from ")
                         + session.provider + " to " + profile.id);
+                    for (auto& message : session.messages) message.provider_items.clear();
                 }
                 session.provider = profile.id;
                 if (session.model != model) {
                     WriteLog("INFO", std::string("Resumed session model changed from ")
                         + session.model + " to " + model);
                     session.model = model;
+                    for (auto& message : session.messages) message.provider_items.clear();
                 }
                 auto approval = [this, target, require_approvals](const kairo::ProposedAction& action) {
                     if (!require_approvals) return true;
@@ -991,7 +1189,8 @@ private:
                     "failures even if a compound shell command reports exit code 0. Writes and shell commands "
                     "require approval.", {}, {}});
                 profile.api_key = api_key;
-                auto provider = kairo::CreateProvider(profile);
+                auto provider = kairo::CreateProvider(
+                    profile, 120, ChatGPTCredentialPath().string());
                 kairo::Limits limits;
                 kairo::AgentEngine engine(provider,
                     kairo::Workspace(project, limits.max_tool_output_bytes,

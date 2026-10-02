@@ -1,6 +1,8 @@
 #include "kairo/agent_engine.h"
+#include "kairo/chatgpt_auth.h"
 #include "kairo/openai_provider.h"
 #include "kairo/provider_profile.h"
+#include "kairo/session_store.h"
 #include "kairo/sse_decoder.h"
 #include "json.h"
 
@@ -109,16 +111,20 @@ void TestProviderUrlPolicy() {
 
 void TestProviderProfiles() {
     const auto profiles = kairo::DefaultProviderProfiles();
-    Check(profiles.size() >= 3, "default provider profiles");
+    Check(profiles.size() >= 4, "default provider profiles");
     auto find = [&](const std::string& id) -> const kairo::ProviderProfile& {
         auto found = std::find_if(profiles.begin(), profiles.end(),
             [&](const kairo::ProviderProfile& profile) { return profile.id == id; });
         if (found == profiles.end()) throw std::runtime_error("missing provider profile: " + id);
         return *found;
     };
+    const auto& chatgpt = find("chatgpt");
     const auto& openai = find("openai");
     const auto& anthropic = find("anthropic");
     const auto& custom = find("custom");
+    Check(chatgpt.kind == kairo::ProviderKind::ChatGPTPlan &&
+          kairo::ProviderUsesChatGPTPlan(chatgpt.kind) &&
+          !kairo::ProviderUsesApiKey(chatgpt.kind), "ChatGPT plan profile defaults");
     Check(openai.kind == kairo::ProviderKind::OpenAI && !openai.models.empty(),
           "OpenAI profile defaults");
     Check(anthropic.kind == kairo::ProviderKind::AnthropicCompatibility &&
@@ -127,6 +133,8 @@ void TestProviderProfiles() {
     Check(kairo::ParseProviderKind(kairo::ProviderKindId(custom.kind)) == custom.kind,
           "provider kind round trip");
     Check(kairo::CreateProvider(anthropic) != nullptr, "provider factory");
+    Check(kairo::CreateProvider(chatgpt, 30, "/tmp/kairo-chatgpt-test.json") != nullptr,
+          "ChatGPT provider factory");
 }
 
 void TestJsonUnicode() {
@@ -223,6 +231,44 @@ void TestAgentApprovalAndResume() {
     Check((metadata.st_mode & 077) == 0, "session file permissions are restrictive");
 }
 
+void TestProviderContextPersistence() {
+    TemporaryDirectory temporary;
+    fs::path project = temporary.path() / "project";
+    fs::create_directories(project);
+    kairo::SessionStore store(temporary.path() / "sessions");
+    kairo::Session session = store.Create(project, "chatgpt-model", "chatgpt");
+    session.messages.push_back({kairo::Role::Assistant, "working", {},
+        {{"call-7", "read_file", R"({"path":"README.md"})"}},
+        {R"({"type":"reasoning","encrypted_content":"opaque-test-value"})"}});
+    store.Save(session);
+    const auto loaded = store.Load(session.id);
+    Check(loaded.messages.size() == 1, "provider context message persisted");
+    Check(loaded.messages[0].provider_items == session.messages[0].provider_items,
+          "provider-specific reasoning context persisted");
+    Check(loaded.messages[0].tool_calls.size() == 1 &&
+          loaded.messages[0].tool_calls[0].id == "call-7", "provider tool call persisted");
+}
+
+void TestChatGPTCredentialFilePolicy() {
+    TemporaryDirectory temporary;
+    const fs::path credential = temporary.path() / "credentials.json";
+    std::ofstream(credential) << R"({"client_id":"client","subject":"subject"})";
+    ::chmod(credential.c_str(), 0644);
+    const auto account = kairo::ChatGPTAuth(credential).Account();
+    Check(account.client_id == "client" && account.subject == "subject",
+          "ChatGPT credential record loaded");
+    struct stat metadata{};
+    Check(::stat(credential.c_str(), &metadata) == 0 && (metadata.st_mode & 077) == 0,
+          "ChatGPT credential permissions repaired");
+
+    const fs::path linked = temporary.path() / "linked-credentials.json";
+    fs::create_symlink(credential, linked);
+    bool rejected = false;
+    try { (void)kairo::ChatGPTAuth(linked).Account(); }
+    catch (const std::runtime_error&) { rejected = true; }
+    Check(rejected, "ChatGPT credential symlink rejected");
+}
+
 void TestAgentDenialAndCancellation() {
     TemporaryDirectory temporary;
     fs::path project = temporary.path() / "project";
@@ -256,6 +302,8 @@ int main() {
         TestJsonUnicode();
         TestWorkspacePolicy();
         TestAgentApprovalAndResume();
+        TestProviderContextPersistence();
+        TestChatGPTCredentialFilePolicy();
         TestAgentDenialAndCancellation();
         std::cout << "All Kairo tests passed.\n";
         return 0;
