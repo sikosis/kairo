@@ -238,6 +238,22 @@ bool DefaultBrowserIsWebPositive() {
     return name.find("webpositive") != std::string::npos;
 }
 
+std::string CallbackPortForLog(const std::string& authorization_url) {
+//---------------------------------------------------------------------------------------------------------------------------------//
+
+    const char* markers[] = {"127.0.0.1%3A", "127.0.0.1%3a", "127.0.0.1:"};
+    for (const char* marker : markers) {
+        std::size_t position = authorization_url.find(marker);
+        if (position == std::string::npos) continue;
+        position += std::strlen(marker);
+        std::size_t end = position;
+        while (end < authorization_url.size() &&
+               std::isdigit(static_cast<unsigned char>(authorization_url[end]))) ++end;
+        if (end > position) return authorization_url.substr(position, end - position);
+    }
+    return "unknown";
+}
+
 struct ProviderSettings {
     std::vector<kairo::ProviderProfile> profiles;
     std::string selected_provider_id;
@@ -699,6 +715,7 @@ private:
         if (message->FindString("url", &url) != B_OK || !url) return;
         const bool copied = CopyTextToClipboard(url);
         const bool webpositive = DefaultBrowserIsWebPositive();
+        const std::string callback_port = CallbackPortForLog(url);
         status_t opened = B_OK;
         if (!webpositive) {
             const char* arguments[] = {url};
@@ -708,6 +725,7 @@ private:
             std::string(webpositive
                 ? "WebPositive launch skipped for ChatGPT authorization"
                 : "ChatGPT authorization handed to the default browser; result=" + std::to_string(opened))
+            + "; callback_port=" + callback_port
             + "; URL copied=" + (copied ? "yes" : "no"));
         if (webpositive) {
             chatgpt_status_->SetText(copied

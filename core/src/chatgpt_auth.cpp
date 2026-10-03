@@ -513,8 +513,7 @@ ChatGPTAccount ChatGPTAuth::SignIn(const BrowserLauncher& launch_browser,
     };
     std::map<std::string, std::string> values;
     bool callback_received = false;
-    constexpr int kSignInTimeoutSeconds = 900;
-    for (int elapsed = 0; elapsed < kSignInTimeoutSeconds && !callback_received; ++elapsed) {
+    while (!callback_received) {
         if (cancellation.IsCancelled()) throw std::runtime_error("ChatGPT sign-in was cancelled");
         fd_set set; FD_ZERO(&set); FD_SET(listener, &set); timeval timeout{1, 0};
         int ready = ::select(listener + 1, &set, nullptr, nullptr, &timeout);
@@ -574,8 +573,6 @@ ChatGPTAccount ChatGPTAuth::SignIn(const BrowserLauncher& launch_browser,
             "<!doctype html><title>Kairo</title><p>Authorization received. You can return to Kairo.</p>");
         callback_received = true;
     }
-    if (!callback_received)
-        throw std::runtime_error("ChatGPT sign-in timed out before the browser returned to Kairo; if WebPositive showed security or Cloudflare errors, retry the copied sign-in URL in Firefox");
     if (!values["error"].empty()) throw std::runtime_error("ChatGPT sign-in was denied: " + values["error"]);
     if (values["code"].empty()) throw std::runtime_error("ChatGPT callback did not contain a code");
     std::string client_id = previous.client_id;

@@ -233,8 +233,9 @@ WebPositive may be unable to complete OpenAI's current Cloudflare browser check.
 When it is the default browser, Kairo copies the short-lived sign-in URL without
 opening WebPositive. Paste that URL into Firefox, finish signing in, and keep
 Provider Settings open so Kairo can receive the redirect on `127.0.0.1`. The
-listener remains available for 15 minutes and ignores unrelated or malformed
-local requests instead of abandoning the sign-in attempt.
+listener remains available until sign-in completes or you explicitly cancel it,
+and ignores unrelated or malformed local requests instead of abandoning the
+sign-in attempt.
 
 ## More documentation
 
