@@ -3,11 +3,11 @@ resource app_signature "application/x-vnd.Kairo-Agent";
 resource app_flags B_SINGLE_LAUNCH;
 
 resource app_version {
-    major = 0,
-    middle = 1,
+    major = @KAIRO_VERSION_MAJOR@,
+    middle = @KAIRO_VERSION_MINOR@,
     minor = 0,
-    variety = B_APPV_BETA,
-    internal = 1,
-    short_info = "Kairo",
+    variety = B_APPV_FINAL,
+    internal = @KAIRO_VERSION_MINOR@,
+    short_info = "Kairo @KAIRO_VERSION@",
     long_info = "Native AI pair programming for Haiku"
 };

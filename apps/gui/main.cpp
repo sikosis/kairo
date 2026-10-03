@@ -8,7 +8,6 @@
 #include "kairo/provider_profile.h"
 
 #include <Alert.h>
-#include <AppFileInfo.h>
 #include <Application.h>
 #include <Bitmap.h>
 #include <Box.h>
@@ -27,6 +26,7 @@
 #include <MenuItem.h>
 #include <Message.h>
 #include <Messenger.h>
+#include <NodeInfo.h>
 #include <Path.h>
 #include <PopUpMenu.h>
 #include <Roster.h>
@@ -90,37 +90,20 @@ constexpr const char* kApplicationSignature = "application/x-vnd.Kairo-Agent";
 fs::path ChatGPTCredentialPath();
 
 std::string ApplicationVersion() {
-    app_info info;
-    if (be_app->GetAppInfo(&info) != B_OK) return "0.1.0 beta";
+//---------------------------------------------------------------------------------------------------------------------------------//
 
-    BFile file(&info.ref, B_READ_ONLY);
-    BAppFileInfo app_file_info(&file);
-    version_info version;
-    if (app_file_info.GetVersionInfo(&version, B_APP_VERSION_KIND) != B_OK)
-        return "0.1.0 beta";
-
-    std::string value = std::to_string(version.major) + "." +
-        std::to_string(version.middle) + "." + std::to_string(version.minor);
-    switch (version.variety) {
-        case B_DEVELOPMENT_VERSION: value += " development"; break;
-        case B_ALPHA_VERSION: value += " alpha"; break;
-        case B_BETA_VERSION: value += " beta"; break;
-        case B_GAMMA_VERSION: value += " gamma"; break;
-        case B_GOLDEN_MASTER_VERSION: value += " gold master"; break;
-        default: break;
-    }
-    return value;
+    return KAIRO_VERSION;
 }
 
 BBitmap* ApplicationIcon() {
+//---------------------------------------------------------------------------------------------------------------------------------//
+
     app_info info;
     if (be_app->GetAppInfo(&info) != B_OK) return nullptr;
 
-    BFile file(&info.ref, B_READ_ONLY);
-    BAppFileInfo app_file_info(&file);
-    BBitmap* icon = new BBitmap(BRect(0, 0, 63, 63), B_RGBA32);
+    BBitmap* icon = new BBitmap(BRect(0, 0, 31, 31), B_RGBA32);
     if (icon->InitCheck() != B_OK ||
-        app_file_info.GetIcon(icon, static_cast<icon_size>(64)) != B_OK) {
+        BNodeInfo::GetTrackerIcon(&info.ref, icon, B_LARGE_ICON) != B_OK) {
         delete icon;
         return nullptr;
     }
@@ -1112,18 +1095,21 @@ private:
     }
 
     void ShowAbout() {
+//---------------------------------------------------------------------------------------------------------------------------------//
+
         const std::string version = ApplicationVersion();
         const std::string text =
             "Kairo " + version + "\n\n"
-            "Native AI pair programming, built for Haiku.\n"
-            "Plan, edit, run, and iterate without leaving your desktop.\n\n"
+            "Code boldly. Stay native.\n"
+            "AI pair programming for Haiku—plan, build, debug, and iterate "
+            "without leaving your desktop.\n\n"
             "Designed by Sikosis\n"
             "https://github.com/sikosis/kairo\n\n"
-            "Copyright \xC2\xA9 2026 Kairo contributors. MIT licensed.\n\n"
-            "Built with Haiku's native kits, libcurl, and OpenSSL 3.\n"
-            "libcurl \xC2\xA9 1996-2026 Daniel Stenberg and contributors; curl licence.\n"
-            "OpenSSL \xC2\xA9 The OpenSSL Project Authors; Apache 2.0 licence.\n\n"
-            "Application icon generated with hvif-tools by Gerasim Troeglazov; MIT licence.\n\n"
+            "Copyright \xC2\xA9 2026 Kairo contributors. MIT License.\n\n"
+            "Powered by Haiku's native kits, libcurl, OpenSSL 3, and OpenAI services.\n"
+            "libcurl \xC2\xA9 Daniel Stenberg and contributors; curl license.\n"
+            "OpenSSL \xC2\xA9 OpenSSL Project Authors; Apache License 2.0.\n"
+            "HVIF conversion uses hvif-tools \xC2\xA9 Gerasim Troeglazov; MIT License.\n\n"
             "Haiku\xC2\xAE and the HAIKU logo\xC2\xAE are registered trademarks of Haiku, Inc.\n"
             "Haiku is developed by the Haiku Project.\n"
             "OpenAI, ChatGPT, and GPT are trademarks of OpenAI.\n"

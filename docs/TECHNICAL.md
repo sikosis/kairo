@@ -98,6 +98,11 @@ to `-lcurl`. On Haiku, a GUI build also compiles and links a probe for the
 OpenSSL 3 APIs used to validate ChatGPT tokens. The build fails with an actionable
 dependency error instead of producing a GUI with ChatGPT sign-in compiled out.
 
+The root `VERSION` file is the single source for Kairo's two-part release number.
+The Makefile supplies it to the GUI and the resource script writes it into Haiku's
+application metadata. Major feature updates add `0.1`; smaller updates and fixes
+add `0.01`.
+
 Useful targets:
 
 ```sh
