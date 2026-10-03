@@ -5,6 +5,8 @@ CURL_CONFIG ?= curl-config
 KAIRO_USE_CURL ?= 1
 UNAME_S := $(shell uname -s)
 
+.DELETE_ON_ERROR:
+
 CPPFLAGS := -Icore/include -Icore/src
 ifeq ($(UNAME_S),Haiku)
 CPPFLAGS += -Ivendor/haiku-x86_64/include
@@ -82,7 +84,8 @@ build/kairo-cli: build/apps/cli/main.o build/libkairo.a $(BUNDLED_CURL_OUTPUTS)
 build/kairo-tests: build/tests/test_main.o build/libkairo.a $(BUNDLED_CURL_OUTPUTS)
 	$(CXX) $(LDFLAGS) $(PROVIDER_RPATH) -o $@ build/tests/test_main.o build/libkairo.a $(PROVIDER_LIBS)
 
-build/kairo-gui: build/apps/gui/main.o build/libkairo.a $(BUNDLED_CURL_OUTPUTS)
+build/kairo-gui: build/apps/gui/main.o build/libkairo.a $(BUNDLED_CURL_OUTPUTS) \
+		resources/kairo.rdef resources/kairo-icon-master.png scripts/embed-haiku-resources.sh
 	$(CXX) $(LDFLAGS) $(PROVIDER_RPATH) -o $@ build/apps/gui/main.o build/libkairo.a $(PROVIDER_LIBS) -lbe -ltracker
 	./scripts/embed-haiku-resources.sh $@
 

@@ -9,5 +9,5 @@ resource app_version {
     variety = B_APPV_BETA,
     internal = 1,
     short_info = "Kairo",
-    long_info = "Kairo native AI coding assistant for Haiku"
+    long_info = "Native AI pair programming for Haiku"
 };

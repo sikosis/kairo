@@ -52,9 +52,9 @@ pkgman install devel:libcrypto pkgconfig
 pkgman install hvif_tools
 ```
 
-`hvif_tools` is optional. Without it the application builds, but the icon may not
-be embedded. OpenSSL 3 is not optional: `make gui` stops with an installation
-command if the compiler cannot find and link the OpenSSL 3 development files.
+`hvif_tools` is required for GUI builds so Kairo's application icon is always
+embedded for the About box, Tracker, and Deskbar. OpenSSL 3 is also required:
+`make gui` stops with an installation command if either dependency is missing.
 
 ### Note about HaikuPorts libcurl
 
