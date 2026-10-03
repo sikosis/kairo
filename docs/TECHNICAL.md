@@ -75,6 +75,13 @@ migrated and newly supplied default profiles are merged by stable ID.
 On Haiku, settings are saved under `~/config/settings/Kairo`. The directory uses
 mode `0700`; settings, session, and log files use mode `0600`.
 
+The diagnostic log contains controlled lifecycle metadata and sanitized error
+messages. Newlines and control characters are normalized, URL query strings and
+JWT-like values are removed, and authentication-labelled diagnostics are dropped
+entirely. Callers must not pass prompts, responses, tool output, API keys, or OAuth
+URLs to the logger. This defence-in-depth rule complements, rather than replaces,
+keeping secret material out of log calls.
+
 Sessions include:
 
 - schema version and Kairo session ID;
@@ -132,6 +139,10 @@ to convert and embed the application icon and always attempts to embed the
 application signature and version metadata. All Haiku executables link with
 `libnetwork` for the OAuth loopback listener and use the bundled libcurl search
 path and `$ORIGIN` runtime path consistently.
+
+The resource script also captures `mimeset` diagnostics and fails the build when
+Haiku's native `FlatIconImporter` rejects a generated icon. A correct four-byte
+HVIF header alone is not treated as sufficient validation.
 
 ## CLI reference
 

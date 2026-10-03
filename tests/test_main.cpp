@@ -1,5 +1,6 @@
 #include "kairo/agent_engine.h"
 #include "kairo/chatgpt_auth.h"
+#include "kairo/diagnostics.h"
 #include "kairo/openai_provider.h"
 #include "kairo/provider_profile.h"
 #include "kairo/session_store.h"
@@ -94,6 +95,24 @@ void TestInputSafetyLimits() {
     try { (void)kairo::json::Parse(nested); }
     catch (const std::runtime_error&) { rejected = true; }
     Check(rejected, "deeply nested JSON rejected");
+}
+
+void TestDiagnosticSanitising() {
+//---------------------------------------------------------------------------------------------------------------------------------//
+
+    Check(kairo::SanitiseDiagnostic("first\nsecond\tthird") == "first second third",
+          "diagnostic control characters normalised");
+    Check(kairo::SanitiseDiagnostic(
+              "callback https://example.test/auth?code=secret&state=secret") ==
+              "callback https://example.test/auth?[redacted]",
+          "diagnostic URL query redacted");
+    Check(kairo::SanitiseDiagnostic("Authorization: Bearer secret") ==
+              "[redacted sensitive diagnostic]",
+          "diagnostic authentication value redacted");
+    const std::string token = std::string(30, 'a') + "." + std::string(30, 'b') +
+                              "." + std::string(30, 'c');
+    Check(kairo::SanitiseDiagnostic("token " + token) == "token [redacted-token]",
+          "diagnostic JWT-like value redacted");
 }
 
 void TestProviderUrlPolicy() {
@@ -297,6 +316,7 @@ int main() {
     try {
         TestSseFragmentation();
         TestInputSafetyLimits();
+        TestDiagnosticSanitising();
         TestProviderUrlPolicy();
         TestProviderProfiles();
         TestJsonUnicode();

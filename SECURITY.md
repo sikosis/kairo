@@ -21,6 +21,10 @@ reuse.
 - Session files can contain prompts, model responses, tool output, project paths,
   and excerpts of source files. Treat the session directory and `kairo.log` as
   potentially sensitive local data.
+- Diagnostic entries exclude prompts and tool output and pass through token,
+  authentication-field, URL-query, control-character, and length sanitization.
+  The log still includes local project paths, session IDs, provider/model names,
+  and error summaries, so review it before sharing.
 - Remote provider URLs must use HTTPS. Plain HTTP is accepted only for loopback
   providers (`localhost`, `127.0.0.1`, or `::1`).
 

@@ -51,6 +51,7 @@ CORE_SOURCES := \
 	core/src/agent_engine.cpp \
 	core/src/chatgpt_auth.cpp \
 	core/src/chatgpt_provider.cpp \
+	core/src/diagnostics.cpp \
 	core/src/events.cpp \
 	core/src/json.cpp \
 	core/src/model.cpp \

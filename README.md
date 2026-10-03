@@ -154,6 +154,11 @@ with ChatGPT**. Kairo opens the system browser, receives the authorization on a
 temporary `127.0.0.1` callback, and loads the models available to that account.
 Kairo saves the discovered model list after sign-in; choose one in the main window.
 
+The sign-in URL is also copied to the clipboard. If Haiku's WebPositive browser
+shows Cloudflare, cross-origin, or security-check errors, paste that URL into
+Firefox and complete the same sign-in there. The temporary callback listener in
+Kairo will receive Firefox's redirect normally.
+
 This flow uses OpenAI's OAuth support for open-source applications and calls the
 Responses API directly. It does not require an API key or an external Codex
 installation. Kairo stores the rotating tokens in the owner-only file
@@ -176,6 +181,20 @@ filters credential-shaped environment variables from child processes, and never
 writes API keys into conversation files or diagnostic logs. Approved shell
 commands still run with your user account, so read the command shown in every
 approval dialog.
+
+## Diagnostic log
+
+Kairo writes an owner-only diagnostic log to:
+
+```text
+~/config/settings/Kairo/kairo.log
+```
+
+It records the Kairo version, provider kind, selected model, project and session,
+approval state, ChatGPT sign-in stages, tool start/finish status, and sanitized
+errors. It deliberately does not record prompts, model replies, tool output, API
+keys, OAuth URLs, or tokens. Project paths and session IDs can still reveal local
+information, so inspect the file before sharing it publicly.
 
 ## Common problems
 
@@ -208,6 +227,14 @@ Kairo automatically checks `/boot/system/data/ssl/CARootCertificates.pem`.
 Open provider settings and replace the model with an exact model ID available to
 your account. A model appearing in a general catalogue does not guarantee that
 the selected account can use it.
+
+### ChatGPT sign-in stalls in WebPositive
+
+WebPositive may be unable to complete OpenAI's current Cloudflare browser check.
+Kairo copies the short-lived sign-in URL when it opens the system browser. Paste
+that URL into Firefox, finish signing in, and leave Kairo running so it can receive
+the redirect on `127.0.0.1`. The browser's CSP and Turnstile console warnings do
+not indicate a failure in Kairo's callback listener.
 
 ## More documentation
 

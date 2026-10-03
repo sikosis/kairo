@@ -22,7 +22,9 @@ resources with `rc`, and attaches them to `build/kairo-gui` with `xres`. It also
 writes the validated icon to the executable's `BEOS:ICON` attribute and runs
 `mimeset -f` so Tracker and Deskbar refresh their metadata. The build verifies
 that `BEOS:ICON` and `BEOS:APP_VERSION` exist in the finished executable and
-fails instead of silently producing an iconless application.
+fails instead of silently producing an iconless application. It also treats any
+native `FlatIconImporter` parsing diagnostic from `mimeset` as a build failure;
+an HVIF header by itself does not prove that Haiku can render the shape data.
 
 `kairo.rdef` is a source template. The resource script reads the authoritative
 two-part release number from the repository's `VERSION` file and writes matching

@@ -506,7 +506,8 @@ ChatGPTAccount ChatGPTAuth::SignIn(const BrowserLauncher& launch_browser,
         if (ready < 0) throw std::runtime_error("ChatGPT callback listener failed");
         if (ready > 0) client = ::accept(listener, nullptr, nullptr);
     }
-    if (client < 0) throw std::runtime_error("ChatGPT sign-in timed out");
+    if (client < 0)
+        throw std::runtime_error("ChatGPT sign-in timed out before the browser returned to Kairo; if WebPositive showed security or Cloudflare errors, retry the copied sign-in URL in Firefox");
     std::unique_ptr<int, SocketCloser> client_guard(new int(client));
     timeval receive_timeout{5, 0};
     if (::setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &receive_timeout,

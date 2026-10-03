@@ -1,44 +1,24 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-  <defs>
-    <linearGradient id="case" x1="12" y1="8" x2="53" y2="56" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#55c8ff"/>
-      <stop offset="0.38" stop-color="#1688ee"/>
-      <stop offset="1" stop-color="#0750b7"/>
-    </linearGradient>
-    <linearGradient id="screen" x1="18" y1="19" x2="45" y2="45" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#168e99"/>
-      <stop offset="1" stop-color="#063d52"/>
-    </linearGradient>
-    <linearGradient id="star" x1="32" y1="22" x2="32" y2="44" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#fff56a"/>
-      <stop offset="0.52" stop-color="#ffc21c"/>
-      <stop offset="1" stop-color="#f47700"/>
-    </linearGradient>
-  </defs>
+  <!-- Deliberately simple, solid paths for reliable conversion by Haiku's
+       icon2icon and parsing by the native FlatIconImporter. -->
+  <path d="M14 8 L48 11 C54 12 57 16 57 22 L57 44 C57 50 53 53 48 54 L16 56 C10 56 7 52 7 46 L7 17 C7 11 10 8 14 8 Z" fill="#06336f"/>
+  <path d="M15 7 L47 10 C53 11 55 14 55 20 L55 43 C55 48 52 51 47 51 L16 53 C11 53 9 49 9 45 L9 16 C9 11 11 7 15 7 Z" fill="#198ce8"/>
+  <path d="M15 9 L46 12 C49 12 52 14 53 17 L16 14 C13 14 11 16 11 20 L11 44 C11 47 12 49 14 51 C12 50 10 47 10 44 L10 17 C10 12 12 9 15 9 Z" fill="#55c5f4"/>
+  <path d="M17 14 L46 16 C50 16 52 19 52 23 L52 40 C52 44 49 46 45 47 L18 48 C14 48 12 45 12 41 L12 20 C12 16 14 14 17 14 Z" fill="#111a2b"/>
+  <path d="M19 17 L44 19 C47 19 49 21 49 24 L49 38 C49 41 47 43 44 43 L20 45 C17 45 15 42 15 39 L15 22 C15 19 17 17 19 17 Z" fill="#07516a"/>
+  <path d="M20 18 L43 20 C45 20 47 21 48 23 L19 21 C17 21 16 23 16 26 L16 37 C16 40 17 42 19 43 C17 42 16 40 16 38 L16 23 C16 20 18 18 20 18 Z" fill="#21a5b3"/>
 
-  <!-- Compact BeOS-style CRT silhouette, readable down to 16 px. -->
-  <path d="M14 8.5 L48 11.5 C53.5 12 57 16 57 21.5 V45 C57 50 53 53.5 48 54 L17 56 C11 56.3 7 52 7 46 V17 C7 11.5 10 8.2 14 8.5 Z"
-        fill="#062d70" stroke="#03204e" stroke-width="2"/>
-  <path d="M14.5 7 L47.5 10 C53.5 10.5 56 14 56 20 V43.5 C56 49 52.5 51.5 47.5 52 L16 54 C10.5 54 8 50 8 45 V16 C8 11 10.5 7 14.5 7 Z"
-        fill="url(#case)" stroke="#07347c" stroke-width="1.2"/>
-  <path d="M17 14 L45.5 16 C49 16.3 51 18.5 51 22 V40 C51 44 48.5 46 45 46.3 L18 48 C14 48 12 45 12 41 V20 C12 16.5 14 13.8 17 14 Z"
-        fill="#161b2a" stroke="#06142e" stroke-width="2"/>
-  <path d="M19 17 L44 18.5 C46.7 18.7 48.5 20.5 48.5 23 V38.5 C48.5 41.4 46.5 43 44 43.3 L20 44.5 C16.8 44.5 15 42.2 15 39 V22 C15 19 16.5 16.8 19 17 Z"
-        fill="url(#screen)" stroke="#49bed0" stroke-width="0.8"/>
-  <path d="M18.5 18.3 L43.5 19.7 C45 19.8 46 20.5 46.7 21.8"
-        fill="none" stroke="#70e4e5" stroke-width="1" opacity="0.7"/>
+  <!-- Compass spark. -->
+  <path d="M32 21 L35 29 L43 32 L35 35 L32 43 L29 35 L21 32 L29 29 Z" fill="#f59a14"/>
+  <path d="M32 24 L33 31 L40 32 L33 33 L32 40 L31 33 L24 32 L31 31 Z" fill="#ffe75a"/>
+  <path d="M26 27 L28 25 L29 27 L27 29 Z" fill="#ffc42b"/>
+  <path d="M36 25 L38 27 L37 29 L35 27 Z" fill="#ffc42b"/>
+  <path d="M37 35 L39 37 L37 39 L35 37 Z" fill="#ffc42b"/>
+  <path d="M27 35 L29 37 L27 39 L25 37 Z" fill="#ffc42b"/>
 
-  <!-- Compass spark: Kairo's navigation/agent mark. -->
-  <path d="M32 21 L34.7 29.2 L43 32 L34.7 34.8 L32 43 L29.3 34.8 L21 32 L29.3 29.2 Z"
-        fill="url(#star)" stroke="#fff2a0" stroke-width="0.75"/>
-  <path d="M32 24 L33 31 L40 32 L33 33 L32 40 L31 33 L24 32 L31 31 Z"
-        fill="#fff7a8" opacity="0.72"/>
-  <path d="M25.5 27.7 A9 9 0 0 1 28 25.7 M36 25.7 A9 9 0 0 1 38.5 27.7
-           M38.5 36.3 A9 9 0 0 1 36 38.3 M28 38.3 A9 9 0 0 1 25.5 36.3"
-        fill="none" stroke="#ffc928" stroke-width="1.5" stroke-linecap="round"/>
-
-  <circle cx="50.5" cy="46.5" r="2.2" fill="#ef4338" stroke="#7e141e" stroke-width="0.8"/>
-  <path d="M19 54 L45 52.5 L48 57 L18 59 C15.5 59 14.8 57 16 55.2 Z"
-        fill="#34374b" stroke="#111729" stroke-width="1"/>
+  <path d="M49 44 L52 44 L54 47 L52 50 L49 50 L47 47 Z" fill="#8b1721"/>
+  <path d="M50 45 L52 45 L53 47 L52 49 L50 49 L48 47 Z" fill="#ef473d"/>
+  <path d="M18 53 L45 51 L49 57 L18 59 C15 59 14 57 16 55 Z" fill="#171e31"/>
+  <path d="M20 54 L43 53 L45 56 L19 57 Z" fill="#3d4860"/>
 </svg>

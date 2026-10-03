@@ -4,6 +4,7 @@
 
 #include "kairo/agent_engine.h"
 #include "kairo/chatgpt_auth.h"
+#include "kairo/diagnostics.h"
 #include "kairo/openai_provider.h"
 #include "kairo/provider_profile.h"
 
@@ -13,6 +14,7 @@
 #include <Box.h>
 #include <Button.h>
 #include <CheckBox.h>
+#include <Clipboard.h>
 #include <Entry.h>
 #include <File.h>
 #include <FilePanel.h>
@@ -35,6 +37,7 @@
 #include <StringView.h>
 #include <TextControl.h>
 #include <TextView.h>
+#include <TypeConstants.h>
 #include <Window.h>
 
 #include <algorithm>
@@ -189,7 +192,8 @@ void WriteLog(const char* level, const std::string& message) noexcept {
         char timestamp[32] = "unknown-time";
         if (localtime_r(&now, &local_time))
             std::strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &local_time);
-        std::string line = std::string(timestamp) + " [" + level + "] " + message + "\n";
+        std::string line = std::string(timestamp) + " [" + level + "] "
+            + kairo::SanitiseDiagnostic(message) + "\n";
         const char* data = line.data();
         size_t remaining = line.size();
         while (remaining > 0) {
@@ -202,6 +206,20 @@ void WriteLog(const char* level, const std::string& message) noexcept {
     } catch (...) {
         // Logging must never take down the GUI.
     }
+}
+
+bool CopyTextToClipboard(const std::string& text) {
+//---------------------------------------------------------------------------------------------------------------------------------//
+
+    if (!be_clipboard || !be_clipboard->Lock()) return false;
+    be_clipboard->Clear();
+    BMessage* data = be_clipboard->Data();
+    status_t result = data
+        ? data->AddData("text/plain", B_MIME_TYPE, text.c_str(), text.size() + 1)
+        : B_ERROR;
+    if (result == B_OK) result = be_clipboard->Commit();
+    be_clipboard->Unlock();
+    return result == B_OK;
 }
 
 struct ProviderSettings {
@@ -593,6 +611,7 @@ private:
 
     void StartChatGPTSignIn() {
         if (auth_busy_ || !kairo::ProviderUsesChatGPTPlan(profiles_[current_].kind)) return;
+        WriteLog("INFO", "ChatGPT sign-in started; waiting for loopback callback");
         auth_busy_ = true;
         auth_cancellation_ = kairo::CancellationToken{};
         UpdateKindControls();
@@ -625,6 +644,7 @@ private:
 
     void StartChatGPTSignOut() {
         if (auth_busy_ || !kairo::ProviderUsesChatGPTPlan(profiles_[current_].kind)) return;
+        WriteLog("INFO", "ChatGPT sign-out started");
         auth_busy_ = true;
         UpdateKindControls();
         chatgpt_status_->SetText("Signing out...");
@@ -646,14 +666,28 @@ private:
     void OpenAuthUrl(BMessage* message) {
         const char* url = nullptr;
         if (message->FindString("url", &url) != B_OK || !url) return;
+        const bool copied = CopyTextToClipboard(url);
         const char* arguments[] = {url};
         status_t opened = be_roster->Launch("text/html", 1, arguments);
+        WriteLog(opened == B_OK ? "INFO" : "WARNING",
+            std::string("ChatGPT authorization handed to the default browser; result=")
+            + std::to_string(opened) + "; URL copied=" + (copied ? "yes" : "no"));
         if (opened != B_OK) {
-            std::string text = "Kairo could not open the browser. Copy this URL into your browser:\n\n";
-            text += url;
+            std::string text = "Kairo could not open the default browser.";
+            text += copied ? " The sign-in URL is on the clipboard; paste it into Firefox."
+                           : " Please set Firefox as the default browser and try again.";
             (new BAlert("chatgpt-url", text.c_str(), "OK", nullptr, nullptr,
                         B_WIDTH_AS_USUAL, B_WARNING_ALERT))->Go();
+            return;
         }
+        chatgpt_status_->SetText(copied
+            ? "Waiting for browser; sign-in URL copied for Firefox"
+            : "Waiting for browser authorization...");
+        (new BAlert("chatgpt-browser",
+            copied
+                ? "Kairo opened your default browser and copied the sign-in URL. If WebPositive shows security or Cloudflare errors, paste the URL into Firefox."
+                : "Kairo opened your default browser. If WebPositive shows security or Cloudflare errors, set Firefox as the default browser and retry.",
+            "OK", nullptr, nullptr, B_WIDTH_AS_USUAL, B_INFO_ALERT))->Go();
     }
 
     void FinishChatGPTAuth(BMessage* message) {
@@ -683,13 +717,18 @@ private:
                 }
             }
             chatgpt_status_->SetText("Connected; saving model list...");
+            WriteLog("INFO", "ChatGPT sign-in completed and model list was received");
             SaveAll();
             return;
-        } else if (ok) chatgpt_status_->SetText("Signed out");
+        } else if (ok) {
+            chatgpt_status_->SetText("Signed out");
+            WriteLog("INFO", "ChatGPT sign-out completed");
+        }
         else {
             const char* error = "ChatGPT authorization failed";
             message->FindString("error", &error);
             chatgpt_status_->SetText("Authorization failed");
+            WriteLog("ERROR", std::string("ChatGPT account operation failed: ") + error);
             (new BAlert("chatgpt-error", error, "OK", nullptr, nullptr,
                         B_WIDTH_AS_USUAL, B_STOP_ALERT))->Go();
         }
@@ -884,7 +923,7 @@ public:
                     .Add(send_)
                 .End()
             .End();
-        WriteLog("INFO", "Kairo GUI started");
+        WriteLog("INFO", std::string("Kairo GUI ") + ApplicationVersion() + " started");
     }
 
     ~KairoWindow() override {
@@ -984,6 +1023,8 @@ private:
         selected_provider_index_ = static_cast<std::size_t>(index);
         provider_settings_.selected_provider_id = ActiveProfile().id;
         RebuildModelMenu();
+        WriteLog("INFO", std::string("Active provider changed; id=") + ActiveProfile().id
+            + "; kind=" + kairo::ProviderKindId(ActiveProfile().kind));
         status_->SetText(ReadyStatus(ActiveProfile()).c_str());
         SaveProviderSettings(provider_settings_);
     }
@@ -995,6 +1036,8 @@ private:
         if (message->FindInt32("index", &index) != B_OK || index < 0
             || static_cast<std::size_t>(index) >= profile.models.size()) return;
         profile.selected_model = profile.models[static_cast<std::size_t>(index)];
+        WriteLog("INFO", std::string("Active model changed; provider=") + profile.id
+            + "; model=" + profile.selected_model);
         SaveProviderSettings(provider_settings_);
     }
 
@@ -1040,6 +1083,7 @@ private:
         transcript_->SetText("");
         status_->SetText(ReadyStatus(ActiveProfile()).c_str());
         prompt_->MakeFocus(true);
+        WriteLog("INFO", "New session selected");
     }
 
     void OpenSettings() {
@@ -1135,7 +1179,10 @@ private:
         if (message->FindRef("refs", &reference) != B_OK) return;
         BEntry entry(&reference, true);
         BPath path;
-        if (entry.GetPath(&path) == B_OK) project_->SetText(path.Path());
+        if (entry.GetPath(&path) == B_OK) {
+            project_->SetText(path.Path());
+            WriteLog("INFO", std::string("Project selected; path=") + path.Path());
+        }
     }
 
     void StartRun() {
@@ -1179,8 +1226,11 @@ private:
         std::string model = selected_model ? selected_model->Label() : profile.selected_model;
         profile.selected_model = model;
         bool require_approvals = approval_checkbox_->Value() == B_CONTROL_ON;
-        WriteLog("INFO", std::string("Run started with provider ") + profile.name
-            + " and model " + model);
+        WriteLog("INFO", std::string("Run started; provider=") + profile.id
+            + "; kind=" + kairo::ProviderKindId(profile.kind) + "; model=" + model
+            + "; project=" + project + "; session="
+            + (session_id.empty() ? "new" : session_id) + "; approvals="
+            + (require_approvals ? "on" : "off"));
         worker_ = std::thread([this, target, project, prompt, session_id, model,
                                profile, api_key, require_approvals]() mutable {
             bool engine_started = false;
@@ -1242,7 +1292,6 @@ private:
                 engine_started = true;
                 engine.Run(session, prompt, approval, events, cancellation_);
             } catch (const std::exception& error) {
-                WriteLog("ERROR", "Run failed; details were shown in the GUI");
                 if (!engine_started) {
                     BMessage update(kEngineEvent);
                     update.AddInt32("type", static_cast<int32>(kairo::EventType::Error));
@@ -1281,12 +1330,15 @@ private:
         if (type == kairo::EventType::TextDelta) {
             AppendTranscript(text, TranscriptStyle::Assistant);
         } else if (type == kairo::EventType::ToolStarted) {
+            WriteLog("INFO", std::string("Tool started; name=") + text);
             status_->SetText((std::string("Running ") + text).c_str());
             AppendTranscript(std::string("\n\n[tool: ") + text + "]\n",
                              TranscriptStyle::Tool, true);
         }
         else if (type == kairo::EventType::ToolFinished || type == kairo::EventType::ToolDenied) {
             const bool denied = type == kairo::EventType::ToolDenied;
+            WriteLog(denied ? "WARNING" : "INFO",
+                denied ? "Tool action denied" : "Tool finished");
             AppendTranscript(denied ? "[denied]\n" : "[tool result]\n",
                              denied ? TranscriptStyle::Warning : TranscriptStyle::Tool, true);
             AppendTranscript(text, denied ? TranscriptStyle::Warning
@@ -1302,6 +1354,7 @@ private:
             status_->SetText("Cancelled");
         }
         else if (type == kairo::EventType::Error) {
+            WriteLog("ERROR", std::string("Engine error: ") + text);
             status_->SetText("Error");
             if (std::strncmp(text, "session not found:", 18) == 0)
                 session_->SetText("");
@@ -1316,6 +1369,7 @@ private:
         if (message->FindPointer("approval", &pointer) != B_OK || !pointer) return;
         if (message->FindString("preview", &preview) != B_OK || !preview)
             preview = "No action preview was supplied.";
+        WriteLog("INFO", "Approval requested for a model-proposed action");
         BMessage* decision = new BMessage(kApprovalDecision);
         decision->AddPointer("approval", pointer);
         BAlert* alert = new BAlert("approval", preview, "Deny", "Approve", nullptr,
@@ -1340,6 +1394,8 @@ private:
             pending = *found;
             approvals_.erase(found);
         }
+        WriteLog(which == 1 ? "INFO" : "WARNING",
+            which == 1 ? "Model-proposed action approved" : "Model-proposed action denied");
         pending->Resolve(which == 1);
     }
 

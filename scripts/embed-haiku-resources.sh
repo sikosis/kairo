@@ -66,4 +66,16 @@ if ! listattr "$binary" | grep -q "BEOS:ICON"; then
     echo "error: the Kairo icon attribute was not written to $binary" >&2
     exit 1
 fi
-mimeset -f "$binary"
+mimeset_log="$build_directory/kairo-mimeset.log"
+if ! mimeset -f "$binary" >"$mimeset_log" 2>&1; then
+    cat "$mimeset_log" >&2
+    echo "error: Haiku could not refresh Kairo's MIME information" >&2
+    exit 1
+fi
+if grep -Eqi 'FlatIconImporter|error parsing (shapes|styles|paths)' "$mimeset_log"; then
+    cat "$mimeset_log" >&2
+    echo "error: Haiku rejected the generated HVIF icon" >&2
+    echo "error: do not distribute this binary; update resources/kairo-icon.svg" >&2
+    exit 1
+fi
+rm -f "$mimeset_log"
