@@ -41,6 +41,7 @@
 #include <Window.h>
 
 #include <algorithm>
+#include <cctype>
 #include <condition_variable>
 #include <chrono>
 #include <cstddef>
@@ -220,6 +221,21 @@ bool CopyTextToClipboard(const std::string& text) {
     if (result == B_OK) result = be_clipboard->Commit();
     be_clipboard->Unlock();
     return result == B_OK;
+}
+
+bool DefaultBrowserIsWebPositive() {
+//---------------------------------------------------------------------------------------------------------------------------------//
+
+    entry_ref reference;
+    if (!be_roster || be_roster->FindApp("text/html", &reference) != B_OK) return false;
+    BEntry entry(&reference, true);
+    BPath path;
+    if (entry.GetPath(&path) != B_OK || !path.Leaf()) return false;
+    std::string name = path.Leaf();
+    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
+    return name.find("webpositive") != std::string::npos;
 }
 
 struct ProviderSettings {
@@ -478,6 +494,14 @@ public:
     ~ProviderSettingsWindow() override { auth_cancellation_.Cancel(); }
 
     bool QuitRequested() override {
+        if (auth_busy_) {
+            BAlert* alert = new BAlert("cancel-chatgpt-sign-in",
+                "ChatGPT sign-in is still waiting for the browser callback. Keep this settings window open until Kairo reports that it is connected.",
+                "Keep Waiting", "Cancel Sign-in", nullptr,
+                B_WIDTH_AS_USUAL, B_WARNING_ALERT);
+            alert->SetShortcut(0, B_ESCAPE);
+            if (alert->Go() != 1) return false;
+        }
         auth_cancellation_.Cancel();
         return true;
     }
@@ -630,10 +654,17 @@ private:
                     open.AddString("url", url.c_str());
                     self.SendMessage(&open);
                 }, cancellation);
-                auto models = auth.ListModels();
                 result.AddBool("ok", true);
                 result.AddString("email", account.email.c_str());
-                for (const auto& model : models) result.AddString("model", model.slug.c_str());
+                try {
+                    auto models = auth.ListModels();
+                    if (models.empty())
+                        throw std::runtime_error("OpenAI returned no available ChatGPT models");
+                    for (const auto& model : models)
+                        result.AddString("model", model.slug.c_str());
+                } catch (const std::exception& error) {
+                    result.AddString("model_error", error.what());
+                }
             } catch (const std::exception& error) {
                 result.AddBool("ok", false);
                 result.AddString("error", error.what());
@@ -667,11 +698,28 @@ private:
         const char* url = nullptr;
         if (message->FindString("url", &url) != B_OK || !url) return;
         const bool copied = CopyTextToClipboard(url);
-        const char* arguments[] = {url};
-        status_t opened = be_roster->Launch("text/html", 1, arguments);
+        const bool webpositive = DefaultBrowserIsWebPositive();
+        status_t opened = B_OK;
+        if (!webpositive) {
+            const char* arguments[] = {url};
+            opened = be_roster->Launch("text/html", 1, arguments);
+        }
         WriteLog(opened == B_OK ? "INFO" : "WARNING",
-            std::string("ChatGPT authorization handed to the default browser; result=")
-            + std::to_string(opened) + "; URL copied=" + (copied ? "yes" : "no"));
+            std::string(webpositive
+                ? "WebPositive launch skipped for ChatGPT authorization"
+                : "ChatGPT authorization handed to the default browser; result=" + std::to_string(opened))
+            + "; URL copied=" + (copied ? "yes" : "no"));
+        if (webpositive) {
+            chatgpt_status_->SetText(copied
+                ? "Open Firefox and paste the copied sign-in URL"
+                : "Set Firefox as the default browser and retry");
+            (new BAlert("chatgpt-firefox",
+                copied
+                    ? "WebPositive cannot reliably complete OpenAI's security check. Kairo did not open it. Open Firefox, paste the sign-in URL from the clipboard, and keep this settings window open."
+                    : "WebPositive cannot reliably complete OpenAI's security check. Set Firefox as the default browser, then retry Continue with ChatGPT.",
+                "OK", nullptr, nullptr, B_WIDTH_AS_USUAL, B_INFO_ALERT))->Go();
+            return;
+        }
         if (opened != B_OK) {
             std::string text = "Kairo could not open the default browser.";
             text += copied ? " The sign-in URL is on the clipboard; paste it into Firefox."
@@ -715,6 +763,18 @@ private:
                     for (const auto& model : profile->models) lines += model + "\n";
                     models_->SetText(lines.c_str());
                 }
+            }
+            const char* model_error = nullptr;
+            if (message->FindString("model_error", &model_error) == B_OK && model_error) {
+                UpdateKindControls();
+                chatgpt_status_->SetText("Connected; model list unavailable");
+                WriteLog("WARNING", std::string("ChatGPT connected but model discovery failed: ")
+                    + model_error);
+                std::string detail = "ChatGPT authorization succeeded, but Kairo could not load the model list:\n\n";
+                detail += model_error;
+                (new BAlert("chatgpt-models-error", detail.c_str(), "OK", nullptr, nullptr,
+                            B_WIDTH_AS_USUAL, B_WARNING_ALERT))->Go();
+                return;
             }
             chatgpt_status_->SetText("Connected; saving model list...");
             WriteLog("INFO", "ChatGPT sign-in completed and model list was received");
@@ -771,6 +831,12 @@ private:
     }
 
     void SaveAll() {
+        if (auth_busy_) {
+            (new BAlert("chatgpt-sign-in-active",
+                "Wait for ChatGPT sign-in to finish before saving and closing this window.",
+                "OK", nullptr, nullptr, B_WIDTH_AS_USUAL, B_WARNING_ALERT))->Go();
+            return;
+        }
         if (!StoreCurrent()) {
             (new BAlert("provider-invalid",
                 "Each provider needs a name, an API URL, and at least one model ID.",

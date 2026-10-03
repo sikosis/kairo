@@ -498,43 +498,84 @@ ChatGPTAccount ChatGPTAuth::SignIn(const BrowserLauncher& launch_browser,
         if (!previous.email.empty()) parameters["login_hint"] = previous.email;
     }
     launch_browser(std::string(kAuthorizeEndpoint) + "?" + Form(parameters));
-    int client = -1;
-    for (int elapsed = 0; elapsed < 300 && client < 0; ++elapsed) {
+    auto send_reply = [](int client, const char* status, const std::string& html) {
+        const std::string reply = std::string("HTTP/1.1 ") + status +
+            "\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: " +
+            std::to_string(html.size()) + "\r\n\r\n" + html;
+        const char* data = reply.data();
+        std::size_t remaining = reply.size();
+        while (remaining > 0) {
+            const ssize_t written = ::write(client, data, remaining);
+            if (written <= 0) break;
+            data += written;
+            remaining -= static_cast<std::size_t>(written);
+        }
+    };
+    std::map<std::string, std::string> values;
+    bool callback_received = false;
+    constexpr int kSignInTimeoutSeconds = 900;
+    for (int elapsed = 0; elapsed < kSignInTimeoutSeconds && !callback_received; ++elapsed) {
         if (cancellation.IsCancelled()) throw std::runtime_error("ChatGPT sign-in was cancelled");
         fd_set set; FD_ZERO(&set); FD_SET(listener, &set); timeval timeout{1, 0};
         int ready = ::select(listener + 1, &set, nullptr, nullptr, &timeout);
-        if (ready < 0) throw std::runtime_error("ChatGPT callback listener failed");
-        if (ready > 0) client = ::accept(listener, nullptr, nullptr);
+        if (ready < 0) {
+            if (errno == EINTR) continue;
+            throw std::runtime_error("ChatGPT callback listener failed");
+        }
+        if (ready == 0) continue;
+        int client = ::accept(listener, nullptr, nullptr);
+        if (client < 0) {
+            if (errno == EINTR) continue;
+            throw std::runtime_error("ChatGPT callback accept failed");
+        }
+        std::unique_ptr<int, SocketCloser> client_guard(new int(client));
+        timeval receive_timeout{5, 0};
+        if (::setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &receive_timeout,
+                         sizeof(receive_timeout)) != 0)
+            continue;
+        std::string request;
+        char buffer[2048];
+        while (request.find("\r\n\r\n") == std::string::npos && request.size() < 16384) {
+            ssize_t count = ::read(client, buffer, sizeof(buffer));
+            if (count <= 0) break;
+            request.append(buffer, static_cast<std::size_t>(count));
+        }
+        std::size_t line_end = request.find("\r\n");
+        if (request.rfind("GET ", 0) != 0 || line_end == std::string::npos) {
+            send_reply(client, "400 Bad Request",
+                "<!doctype html><title>Kairo</title><p>Invalid Kairo callback request.</p>");
+            continue;
+        }
+        std::string target = request.substr(4, line_end - 4);
+        std::size_t space = target.find(' ');
+        if (space != std::string::npos) target.resize(space);
+        std::size_t question = target.find('?');
+        if (question == std::string::npos || target.substr(0, question) != "/auth/callback") {
+            send_reply(client, "404 Not Found",
+                "<!doctype html><title>Kairo</title><p>This is not a Kairo authorization callback.</p>");
+            continue;
+        }
+        try {
+            values = Query(target.substr(question + 1));
+        } catch (const std::exception&) {
+            send_reply(client, "400 Bad Request",
+                "<!doctype html><title>Kairo</title><p>The Kairo callback was malformed.</p>");
+            continue;
+        }
+        const std::string returned_state = values["state"];
+        if (returned_state.size() != state.size() ||
+            CRYPTO_memcmp(returned_state.data(), state.data(), state.size()) != 0) {
+            values.clear();
+            send_reply(client, "400 Bad Request",
+                "<!doctype html><title>Kairo</title><p>This callback does not belong to the active Kairo sign-in.</p>");
+            continue;
+        }
+        send_reply(client, "200 OK",
+            "<!doctype html><title>Kairo</title><p>Authorization received. You can return to Kairo.</p>");
+        callback_received = true;
     }
-    if (client < 0)
+    if (!callback_received)
         throw std::runtime_error("ChatGPT sign-in timed out before the browser returned to Kairo; if WebPositive showed security or Cloudflare errors, retry the copied sign-in URL in Firefox");
-    std::unique_ptr<int, SocketCloser> client_guard(new int(client));
-    timeval receive_timeout{5, 0};
-    if (::setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &receive_timeout,
-                     sizeof(receive_timeout)) != 0)
-        throw std::runtime_error("cannot configure ChatGPT callback timeout");
-    std::string request; char buffer[2048];
-    while (request.find("\r\n\r\n") == std::string::npos && request.size() < 16384) {
-        ssize_t count = ::read(client, buffer, sizeof(buffer));
-        if (count <= 0) break;
-        request.append(buffer, static_cast<std::size_t>(count));
-    }
-    std::size_t line_end = request.find("\r\n");
-    if (request.rfind("GET ", 0) != 0 || line_end == std::string::npos)
-        throw std::runtime_error("invalid ChatGPT OAuth callback");
-    std::string target = request.substr(4, line_end - 4);
-    std::size_t space = target.find(' '); if (space != std::string::npos) target.resize(space);
-    std::size_t question = target.find('?');
-    if (target.substr(0, question) != "/auth/callback" || question == std::string::npos)
-        throw std::runtime_error("invalid ChatGPT OAuth callback path");
-    auto values = Query(target.substr(question + 1));
-    const std::string returned_state = values["state"];
-    if (returned_state.size() != state.size() || CRYPTO_memcmp(returned_state.data(), state.data(), state.size()) != 0)
-        throw std::runtime_error("ChatGPT OAuth state did not match");
-    const std::string html = "<!doctype html><title>Kairo</title><p>Authorization received. You can return to Kairo.</p>";
-    const std::string reply = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: " +
-        std::to_string(html.size()) + "\r\n\r\n" + html;
-    (void)::write(client, reply.data(), reply.size());
     if (!values["error"].empty()) throw std::runtime_error("ChatGPT sign-in was denied: " + values["error"]);
     if (values["code"].empty()) throw std::runtime_error("ChatGPT callback did not contain a code");
     std::string client_id = previous.client_id;

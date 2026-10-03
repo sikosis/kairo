@@ -48,6 +48,12 @@ streaming enabled, full local context, and encrypted reasoning items preserved
 across local tool calls. Kairo's local functions are grouped in a Responses tool
 namespace as required by the ChatGPT-plan preview route. Access tokens are refreshed before expiry. Sign-out
 attempts remote refresh-token revocation and always clears the local tokens.
+
+The loopback listener waits for up to 15 minutes and continues after malformed,
+unrelated, or state-mismatched local requests. Provider Settings warns before
+closing while authorization is active. To avoid competing redirects, Kairo does
+not launch WebPositive when it is the registered default browser; it copies the
+same short-lived authorization URL for the user to open in Firefox instead.
 References:
 
 - [Sign in with ChatGPT quickstart](https://developers.openai.com/siwc/quickstart)

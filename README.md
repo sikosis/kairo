@@ -150,14 +150,13 @@ Kairo does not require, launch, or wrap the Codex command-line program. There is
 no Codex executable for Haiku, and supplying one would defeat Kairo's purpose.
 
 Open **Provider Settings**, select **ChatGPT Plus / Pro**, and press **Continue
-with ChatGPT**. Kairo opens the system browser, receives the authorization on a
-temporary `127.0.0.1` callback, and loads the models available to that account.
+with ChatGPT**. Kairo receives the authorization on a temporary `127.0.0.1`
+callback and loads the models available to that account. It copies the sign-in URL
+to the clipboard and normally opens the system browser. When WebPositive is the
+default, Kairo deliberately leaves it closed and asks you to paste the URL into
+Firefox because WebPositive cannot reliably complete OpenAI's current security
+check. Keep Provider Settings open until it reports that the account is connected.
 Kairo saves the discovered model list after sign-in; choose one in the main window.
-
-The sign-in URL is also copied to the clipboard. If Haiku's WebPositive browser
-shows Cloudflare, cross-origin, or security-check errors, paste that URL into
-Firefox and complete the same sign-in there. The temporary callback listener in
-Kairo will receive Firefox's redirect normally.
 
 This flow uses OpenAI's OAuth support for open-source applications and calls the
 Responses API directly. It does not require an API key or an external Codex
@@ -231,10 +230,11 @@ the selected account can use it.
 ### ChatGPT sign-in stalls in WebPositive
 
 WebPositive may be unable to complete OpenAI's current Cloudflare browser check.
-Kairo copies the short-lived sign-in URL when it opens the system browser. Paste
-that URL into Firefox, finish signing in, and leave Kairo running so it can receive
-the redirect on `127.0.0.1`. The browser's CSP and Turnstile console warnings do
-not indicate a failure in Kairo's callback listener.
+When it is the default browser, Kairo copies the short-lived sign-in URL without
+opening WebPositive. Paste that URL into Firefox, finish signing in, and keep
+Provider Settings open so Kairo can receive the redirect on `127.0.0.1`. The
+listener remains available for 15 minutes and ignores unrelated or malformed
+local requests instead of abandoning the sign-in attempt.
 
 ## More documentation
 
